@@ -192,11 +192,16 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     return () => {
       // Announce leaving
       if (signalingChannel.current) {
-        signalingChannel.current.postMessage({
-          type: 'user-left',
-          from: userName,
-          roomId
-        });
+        try {
+          signalingChannel.current.postMessage({
+            type: 'user-left',
+            from: userName,
+            roomId
+          });
+        } catch (error) {
+          // Channel might already be closed, ignore the error
+          console.log('BroadcastChannel already closed');
+        }
         signalingChannel.current.close();
       }
       
