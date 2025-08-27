@@ -27,8 +27,57 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const signalingChannel = useRef<BroadcastChannel | null>(null);
 
-  // Initialize local media
+  // WebRTC Configuration
+  const rtcConfig = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+  };
+
+  // Create peer connection
+  const createPeerConnection = useCallback((participantId: string) => {
+    const pc = new RTCPeerConnection(rtcConfig);
+    
+    // Add local stream to peer connection
+    if (localStream) {
+      localStream.getTracks().forEach(track => {
+        pc.addTrack(track, localStream);
+      });
+    }
+
+    // Handle incoming stream
+    pc.ontrack = (event) => {
+      const [remoteStream] = event.streams;
+      setParticipants(prev => 
+        prev.map(p => 
+          p.id === participantId 
+            ? { ...p, stream: remoteStream }
+            : p
+        )
+      );
+    };
+
+    // Handle ICE candidates
+    pc.onicecandidate = (event) => {
+      if (event.candidate && signalingChannel.current) {
+        signalingChannel.current.postMessage({
+          type: 'ice-candidate',
+          candidate: event.candidate,
+          from: userName,
+          to: participantId,
+          roomId
+        });
+      }
+    };
+
+    peerConnections.current.set(participantId, pc);
+    return pc;
+  }, [localStream, userName, roomId]);
+
+  // Initialize local media and signaling
   useEffect(() => {
     const initializeMedia = async () => {
       try {
@@ -37,6 +86,92 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
           audio: true,
         });
         setLocalStream(stream);
+        
+        // Initialize signaling channel
+        signalingChannel.current = new BroadcastChannel(`meeting-${roomId}`);
+        
+        // Handle signaling messages
+        signalingChannel.current.onmessage = async (event) => {
+          const { type, from, to, roomId: msgRoomId, ...data } = event.data;
+          
+          // Only process messages for this room and directed to us or broadcast
+          if (msgRoomId !== roomId || (to && to !== userName)) return;
+          
+          switch (type) {
+            case 'user-joined':
+              if (from !== userName) {
+                // Add participant and create offer
+                setParticipants(prev => {
+                  if (prev.find(p => p.id === from)) return prev;
+                  return [...prev, { 
+                    id: from, 
+                    name: from, 
+                    isMuted: false, 
+                    isVideoOff: false 
+                  }];
+                });
+                
+                // Create offer for new participant
+                const pc = createPeerConnection(from);
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                
+                signalingChannel.current?.postMessage({
+                  type: 'offer',
+                  offer,
+                  from: userName,
+                  to: from,
+                  roomId
+                });
+              }
+              break;
+              
+            case 'offer':
+              const pc = createPeerConnection(from);
+              await pc.setRemoteDescription(data.offer);
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              
+              signalingChannel.current?.postMessage({
+                type: 'answer',
+                answer,
+                from: userName,
+                to: from,
+                roomId
+              });
+              break;
+              
+            case 'answer':
+              const existingPc = peerConnections.current.get(from);
+              if (existingPc) {
+                await existingPc.setRemoteDescription(data.answer);
+              }
+              break;
+              
+            case 'ice-candidate':
+              const candidatePc = peerConnections.current.get(from);
+              if (candidatePc) {
+                await candidatePc.addIceCandidate(data.candidate);
+              }
+              break;
+              
+            case 'user-left':
+              const leavingPc = peerConnections.current.get(from);
+              if (leavingPc) {
+                leavingPc.close();
+                peerConnections.current.delete(from);
+              }
+              setParticipants(prev => prev.filter(p => p.id !== from));
+              break;
+          }
+        };
+        
+        // Announce joining
+        signalingChannel.current.postMessage({
+          type: 'user-joined',
+          from: userName,
+          roomId
+        });
         
         toast({
           title: "Connected to meeting",
@@ -55,13 +190,23 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     initializeMedia();
 
     return () => {
+      // Announce leaving
+      if (signalingChannel.current) {
+        signalingChannel.current.postMessage({
+          type: 'user-left',
+          from: userName,
+          roomId
+        });
+        signalingChannel.current.close();
+      }
+      
       // Cleanup
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
       }
       peerConnections.current.forEach(pc => pc.close());
     };
-  }, [roomId, toast]);
+  }, [roomId, toast, userName, createPeerConnection]);
 
   // Toggle mute
   const handleToggleMute = useCallback(() => {
