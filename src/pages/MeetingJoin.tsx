@@ -41,7 +41,7 @@ export const MeetingJoin = () => {
             QuickMeet
           </h1>
           <p className="text-muted-foreground">
-            Instant video meetings with zero friction
+            Instant video meetings and screen sharing.
           </p>
         </div>
 
