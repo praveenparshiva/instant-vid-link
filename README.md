@@ -1,73 +1,47 @@
-# Welcome to your Lovable project
+# QuickMeet
 
-## Project info
+QuickMeet is a clean, modern video meeting platform with instant joining and WebRTC streaming.  
+Built with a minimal dark-themed UI, it provides a seamless experience for connecting with friends, colleagues, or collaborators.
 
-**URL**: https://lovable.dev/projects/ee327465-c284-4678-802c-c96168d0d81a
+---
 
-## How can I edit this code?
+## ✅ Core Features
 
-There are several ways of editing your application.
+- **Instant joining via URL** – No registration required, just enter a room ID and name.  
+- **Live video/audio streaming** – WebRTC implementation for real-time communication.  
+- **Basic controls** – Floating control bar with mute/unmute, camera on/off.  
+- **Screen sharing** – Full screen capture with automatic fallback to camera.  
+- **Group meetings** – Responsive grid layout supporting multiple participants.  
+- **Minimal UI** – Dark theme optimized for video calls with smooth animations.  
 
-**Use Lovable**
+---
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/ee327465-c284-4678-802c-c96168d0d81a) and start prompting.
+## 🛠 Technical Implementation
 
-Changes made via Lovable will be committed automatically to this repo.
+- **Design System** – Semantic color tokens, custom gradients, and smooth transitions.  
+- **WebRTC Integration** – Direct browser APIs for peer-to-peer video streaming.  
+- **Responsive Layout** – Adaptive video grid for 1–4+ participants.  
+- **Modern UI** – Clean controls, professional dark theme, toast notifications.  
 
-**Use your preferred IDE**
+---
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+## 🌟 About
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+I built QuickMeet using **Lovable** as a platform to connect with my friends, share ideas, and collaborate effortlessly.  
+The website was created in a fun, creative spirit — perfect for late-night sessions and *vibe coding* while staying connected.  
 
-Follow these steps:
+---
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+## 🚀 Getting Started
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/your-username/quickmeet.git
+   cd quickmeet
 
-# Step 3: Install the necessary dependencies.
-npm i
+2. Install dependencies:
+   npm install
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
+3. Start the development server:
+   npm run dev
 
-**Edit a file directly in GitHub**
-
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/ee327465-c284-4678-802c-c96168d0d81a) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
