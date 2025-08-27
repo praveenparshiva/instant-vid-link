@@ -38,13 +38,13 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
   };
 
   // Create peer connection
-  const createPeerConnection = useCallback((participantId: string) => {
+  const createPeerConnection = useCallback((participantId: string, currentStream: MediaStream | null) => {
     const pc = new RTCPeerConnection(rtcConfig);
     
     // Add local stream to peer connection
-    if (localStream) {
-      localStream.getTracks().forEach(track => {
-        pc.addTrack(track, localStream);
+    if (currentStream) {
+      currentStream.getTracks().forEach(track => {
+        pc.addTrack(track, currentStream);
       });
     }
 
@@ -75,7 +75,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
 
     peerConnections.current.set(participantId, pc);
     return pc;
-  }, [localStream, userName, roomId]);
+  }, [userName, roomId]);
 
   // Initialize local media and signaling
   useEffect(() => {
@@ -112,7 +112,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
                 });
                 
                 // Create offer for new participant
-                const pc = createPeerConnection(from);
+                const pc = createPeerConnection(from, stream);
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
                 
@@ -127,7 +127,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
               break;
               
             case 'offer':
-              const pc = createPeerConnection(from);
+              const pc = createPeerConnection(from, stream);
               await pc.setRemoteDescription(data.offer);
               const answer = await pc.createAnswer();
               await pc.setLocalDescription(answer);
@@ -211,7 +211,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
       }
       peerConnections.current.forEach(pc => pc.close());
     };
-  }, [roomId, toast, userName, createPeerConnection]);
+  }, [roomId, toast, userName]);
 
   // Toggle mute
   const handleToggleMute = useCallback(() => {
