@@ -90,32 +90,61 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     try {
       if (isScreenSharing) {
         // Stop screen sharing, return to camera
+        if (localStream) {
+          localStream.getTracks().forEach(track => track.stop());
+        }
+        
         const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: true,
         });
         setLocalStream(stream);
         setIsScreenSharing(false);
+        setIsMuted(false);
+        setIsVideoOff(false);
+        
         toast({
           title: "Screen sharing stopped",
           description: "Switched back to camera",
         });
       } else {
         // Start screen sharing
+        if (localStream) {
+          localStream.getTracks().forEach(track => track.stop());
+        }
+        
         const screenStream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
-          audio: true,
+          audio: false, // Don't capture system audio by default
         });
         setLocalStream(screenStream);
         setIsScreenSharing(true);
+        
         toast({
           title: "Screen sharing started",
           description: "Your screen is now being shared",
         });
 
-        // Handle screen share ending
-        screenStream.getVideoTracks()[0].addEventListener('ended', () => {
-          handleToggleScreenShare();
+        // Handle screen share ending (when user clicks "Stop sharing" in browser)
+        screenStream.getVideoTracks()[0].addEventListener('ended', async () => {
+          console.log('Screen sharing ended by user');
+          try {
+            const cameraStream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: true,
+            });
+            setLocalStream(cameraStream);
+            setIsScreenSharing(false);
+            setIsMuted(false);
+            setIsVideoOff(false);
+            
+            toast({
+              title: "Screen sharing ended",
+              description: "Switched back to camera",
+            });
+          } catch (error) {
+            console.error('Error returning to camera after screen share ended:', error);
+          }
         });
       }
     } catch (error) {
