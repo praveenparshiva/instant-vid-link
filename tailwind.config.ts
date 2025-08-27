@@ -61,7 +61,16 @@ export default {
 					'accent-foreground': 'hsl(var(--sidebar-accent-foreground))',
 					border: 'hsl(var(--sidebar-border))',
 					ring: 'hsl(var(--sidebar-ring))'
-				}
+				},
+				video: {
+					surface: 'hsl(var(--video-surface))',
+					'surface-hover': 'hsl(var(--video-surface-hover))',
+					'control-bar': 'hsl(var(--control-bar))',
+					'participant-border': 'hsl(var(--participant-border))'
+				},
+				success: 'hsl(var(--success))',
+				warning: 'hsl(var(--warning))',
+				danger: 'hsl(var(--danger))'
 			},
 			borderRadius: {
 				lg: 'var(--radius)',
