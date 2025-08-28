@@ -52,6 +52,8 @@ All colors MUST be HSL.
     --gradient-primary: linear-gradient(135deg, hsl(217 91% 60%), hsl(217 91% 70%));
     --gradient-success: linear-gradient(135deg, hsl(142 76% 36%), hsl(142 76% 46%));
     --gradient-surface: linear-gradient(180deg, hsl(240 10% 3.9%), hsl(240 8% 6%));
+    --gradient-video-border: linear-gradient(135deg, hsl(271 76% 53%), hsl(217 91% 60%));
+    --gradient-video-hover: linear-gradient(135deg, hsl(271 76% 63%), hsl(217 91% 70%));
 
     /* Shadows */
     --shadow-video: 0 25px 50px -12px hsl(240 10% 3.9% / 0.7);
@@ -132,14 +134,31 @@ All colors MUST be HSL.
   /* Video Meeting Components */
   .video-surface {
     background: hsl(var(--video-surface));
-    border: 1px solid hsl(var(--participant-border));
+    border: 2px solid transparent;
+    background-clip: padding-box;
     box-shadow: var(--shadow-video);
     transition: var(--transition-smooth);
+    position: relative;
+  }
+
+  .video-surface::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    background: var(--gradient-video-border);
+    z-index: -1;
+    transition: var(--transition-smooth);
+  }
+
+  .video-surface:hover::before {
+    background: var(--gradient-video-hover);
+    filter: blur(2px);
   }
 
   .video-surface:hover {
     background: hsl(var(--video-surface-hover));
-    box-shadow: var(--shadow-video), var(--shadow-glow);
+    box-shadow: var(--shadow-video), 0 0 30px hsl(271 76% 53% / 0.4);
   }
 
   .control-bar {

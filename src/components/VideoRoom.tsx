@@ -235,6 +235,42 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     }
   }, [localStream]);
 
+  // Update all peer connections with new stream
+  const updatePeerConnectionStreams = useCallback((newStream: MediaStream) => {
+    peerConnections.current.forEach(async (pc, participantId) => {
+      try {
+        // Remove old tracks
+        const senders = pc.getSenders();
+        for (const sender of senders) {
+          if (sender.track) {
+            pc.removeTrack(sender);
+          }
+        }
+        
+        // Add new tracks
+        newStream.getTracks().forEach(track => {
+          pc.addTrack(track, newStream);
+        });
+
+        // Create and send new offer
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        if (signalingChannel.current) {
+          signalingChannel.current.postMessage({
+            type: 'offer',
+            offer,
+            from: userName,
+            to: participantId,
+            roomId
+          });
+        }
+      } catch (error) {
+        console.error('Error updating peer connection for participant:', participantId, error);
+      }
+    });
+  }, [userName, roomId]);
+
   // Screen sharing
   const handleToggleScreenShare = useCallback(async () => {
     try {
@@ -253,6 +289,9 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         setIsMuted(false);
         setIsVideoOff(false);
         
+        // Update all peer connections with camera stream
+        updatePeerConnectionStreams(stream);
+        
         toast({
           title: "Screen sharing stopped",
           description: "Switched back to camera",
@@ -269,6 +308,9 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         });
         setLocalStream(screenStream);
         setIsScreenSharing(true);
+        
+        // Update all peer connections with screen share stream
+        updatePeerConnectionStreams(screenStream);
         
         toast({
           title: "Screen sharing started",
@@ -288,6 +330,9 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
             setIsMuted(false);
             setIsVideoOff(false);
             
+            // Update all peer connections with camera stream
+            updatePeerConnectionStreams(cameraStream);
+            
             toast({
               title: "Screen sharing ended",
               description: "Switched back to camera",
@@ -305,7 +350,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         variant: "destructive",
       });
     }
-  }, [isScreenSharing, toast]);
+  }, [isScreenSharing, localStream, updatePeerConnectionStreams, toast]);
 
   // Leave call
   const handleLeaveCall = useCallback(() => {
