@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { VideoParticipant } from './VideoParticipant';
 import { VideoControls } from './VideoControls';
 import { useToast } from '@/hooks/use-toast';
+import { io, Socket } from 'socket.io-client';
 
 interface Participant {
   id: string;
@@ -27,7 +28,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const signalingChannel = useRef<BroadcastChannel | null>(null);
+  const socket = useRef<Socket | null>(null);
 
   // WebRTC Configuration
   const rtcConfig = {
@@ -50,6 +51,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
 
     // Handle incoming stream
     pc.ontrack = (event) => {
+      console.log('Received remote stream from:', participantId);
       const [remoteStream] = event.streams;
       setParticipants(prev => 
         prev.map(p => 
@@ -62,20 +64,22 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
 
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
-      if (event.candidate && signalingChannel.current) {
-        signalingChannel.current.postMessage({
-          type: 'ice-candidate',
+      if (event.candidate && socket.current) {
+        socket.current.emit('ice-candidate', {
           candidate: event.candidate,
-          from: userName,
-          to: participantId,
-          roomId
+          to: participantId
         });
       }
     };
 
+    // Handle connection state changes
+    pc.onconnectionstatechange = () => {
+      console.log(`Connection state with ${participantId}:`, pc.connectionState);
+    };
+
     peerConnections.current.set(participantId, pc);
     return pc;
-  }, [userName, roomId]);
+  }, []);
 
   // Initialize local media and signaling
   useEffect(() => {
@@ -87,90 +91,87 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         });
         setLocalStream(stream);
         
-        // Initialize signaling channel
-        signalingChannel.current = new BroadcastChannel(`meeting-${roomId}`);
+        // Connect to signaling server
+        socket.current = io('http://localhost:3001');
         
-        // Handle signaling messages
-        signalingChannel.current.onmessage = async (event) => {
-          const { type, from, to, roomId: msgRoomId, ...data } = event.data;
+        // Join room
+        socket.current.emit('join-room', { roomId, userName });
+        
+        // Handle existing participants
+        socket.current.on('existing-participants', (existingParticipants) => {
+          console.log('Existing participants:', existingParticipants);
+          setParticipants(existingParticipants.map(p => ({
+            id: p.id,
+            name: p.name,
+            isMuted: false,
+            isVideoOff: false
+          })));
           
-          // Only process messages for this room and directed to us or broadcast
-          if (msgRoomId !== roomId || (to && to !== userName)) return;
+          // Create offers for existing participants
+          existingParticipants.forEach(async (participant) => {
+            const pc = createPeerConnection(participant.id, stream);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            
+            socket.current?.emit('offer', {
+              offer,
+              to: participant.id
+            });
+          });
+        });
+        
+        // Handle new user joining
+        socket.current.on('user-joined', (data) => {
+          console.log('User joined:', data);
+          setParticipants(prev => {
+            if (prev.find(p => p.id === data.id)) return prev;
+            return [...prev, { 
+              id: data.id, 
+              name: data.name, 
+              isMuted: false, 
+              isVideoOff: false 
+            }];
+          });
+        });
+        
+        // Handle WebRTC signaling
+        socket.current.on('offer', async (data) => {
+          console.log('Received offer from:', data.from);
+          const pc = createPeerConnection(data.from, stream);
+          await pc.setRemoteDescription(data.offer);
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
           
-          switch (type) {
-            case 'user-joined':
-              if (from !== userName) {
-                // Add participant and create offer
-                setParticipants(prev => {
-                  if (prev.find(p => p.id === from)) return prev;
-                  return [...prev, { 
-                    id: from, 
-                    name: from, 
-                    isMuted: false, 
-                    isVideoOff: false 
-                  }];
-                });
-                
-                // Create offer for new participant
-                const pc = createPeerConnection(from, stream);
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                
-                signalingChannel.current?.postMessage({
-                  type: 'offer',
-                  offer,
-                  from: userName,
-                  to: from,
-                  roomId
-                });
-              }
-              break;
-              
-            case 'offer':
-              const pc = createPeerConnection(from, stream);
-              await pc.setRemoteDescription(data.offer);
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
-              
-              signalingChannel.current?.postMessage({
-                type: 'answer',
-                answer,
-                from: userName,
-                to: from,
-                roomId
-              });
-              break;
-              
-            case 'answer':
-              const existingPc = peerConnections.current.get(from);
-              if (existingPc) {
-                await existingPc.setRemoteDescription(data.answer);
-              }
-              break;
-              
-            case 'ice-candidate':
-              const candidatePc = peerConnections.current.get(from);
-              if (candidatePc) {
-                await candidatePc.addIceCandidate(data.candidate);
-              }
-              break;
-              
-            case 'user-left':
-              const leavingPc = peerConnections.current.get(from);
-              if (leavingPc) {
-                leavingPc.close();
-                peerConnections.current.delete(from);
-              }
-              setParticipants(prev => prev.filter(p => p.id !== from));
-              break;
+          socket.current?.emit('answer', {
+            answer,
+            to: data.from
+          });
+        });
+        
+        socket.current.on('answer', async (data) => {
+          console.log('Received answer from:', data.from);
+          const pc = peerConnections.current.get(data.from);
+          if (pc) {
+            await pc.setRemoteDescription(data.answer);
           }
-        };
+        });
         
-        // Announce joining
-        signalingChannel.current.postMessage({
-          type: 'user-joined',
-          from: userName,
-          roomId
+        socket.current.on('ice-candidate', async (data) => {
+          console.log('Received ICE candidate from:', data.from);
+          const pc = peerConnections.current.get(data.from);
+          if (pc) {
+            await pc.addIceCandidate(data.candidate);
+          }
+        });
+        
+        socket.current.on('user-left', (data) => {
+          console.log('User left:', data);
+          const pc = peerConnections.current.get(data.id);
+          if (pc) {
+            pc.close();
+            peerConnections.current.delete(data.id);
+          }
+          setParticipants(prev => prev.filter(p => p.id !== data.id));
         });
         
         toast({
@@ -190,28 +191,18 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     initializeMedia();
 
     return () => {
-      // Announce leaving
-      if (signalingChannel.current) {
-        try {
-          signalingChannel.current.postMessage({
-            type: 'user-left',
-            from: userName,
-            roomId
-          });
-        } catch (error) {
-          // Channel might already be closed, ignore the error
-          console.log('BroadcastChannel already closed');
-        }
-        signalingChannel.current.close();
+      // Cleanup
+      if (socket.current) {
+        socket.current.disconnect();
       }
       
-      // Cleanup
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
       }
       peerConnections.current.forEach(pc => pc.close());
+      peerConnections.current.clear();
     };
-  }, [roomId, toast, userName]);
+  }, [roomId, toast, userName, createPeerConnection]);
 
   // Toggle mute
   const handleToggleMute = useCallback(() => {
@@ -256,20 +247,17 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         
-        if (signalingChannel.current) {
-          signalingChannel.current.postMessage({
-            type: 'offer',
+        if (socket.current) {
+          socket.current.emit('offer', {
             offer,
-            from: userName,
-            to: participantId,
-            roomId
+            to: participantId
           });
         }
       } catch (error) {
         console.error('Error updating peer connection for participant:', participantId, error);
       }
     });
-  }, [userName, roomId]);
+  }, []);
 
   // Screen sharing
   const handleToggleScreenShare = useCallback(async () => {
