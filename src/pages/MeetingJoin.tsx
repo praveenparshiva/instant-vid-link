@@ -46,7 +46,8 @@ export const MeetingJoin = () => {
         </div>
 
         {/* Join Form */}
-        <Card className="p-6 bg-video-surface border-border">
+        <div className="gradient-border">
+          <Card className="gradient-border-inner p-6 border-0">
           <div className="space-y-4">
             <div className="space-y-2">
               <label htmlFor="roomId" className="text-sm font-medium text-foreground">
@@ -97,6 +98,7 @@ export const MeetingJoin = () => {
             </Button>
           </div>
         </Card>
+        </div>
 
         {/* Features */}
         <div className="grid grid-cols-1 gap-4 text-center">
