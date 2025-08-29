@@ -14,13 +14,97 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      participants: {
+        Row: {
+          display_name: string
+          id: string
+          joined_at: string
+          participant_id: string
+          room_id: string
+          user_id: string | null
+        }
+        Insert: {
+          display_name: string
+          id?: string
+          joined_at?: string
+          participant_id: string
+          room_id: string
+          user_id?: string | null
+        }
+        Update: {
+          display_name?: string
+          id?: string
+          joined_at?: string
+          participant_id?: string
+          room_id?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      rooms: {
+        Row: {
+          created_at: string
+          id: string
+          name: string | null
+          room_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name?: string | null
+          room_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string | null
+          room_id?: string
+        }
+        Relationships: []
+      }
+      signals: {
+        Row: {
+          created_at: string
+          id: string
+          payload: Json
+          room_id: string
+          sender_id: string
+          target_id: string | null
+          type: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          payload: Json
+          room_id: string
+          sender_id: string
+          target_id?: string | null
+          type: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          payload?: Json
+          room_id?: string
+          sender_id?: string
+          target_id?: string | null
+          type?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      cleanup_old_signals: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
+      cleanup_participant: {
+        Args: { p_participant_id: string; p_room_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
