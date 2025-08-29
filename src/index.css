@@ -163,31 +163,46 @@ All colors MUST be HSL.
   /* Video Meeting Components */
   .video-surface {
     background: hsl(var(--video-surface));
-    border: 2px solid transparent;
+    border: 3px solid transparent;
     background-clip: padding-box;
     box-shadow: var(--shadow-video);
     transition: var(--transition-smooth);
     position: relative;
+    border-radius: 16px;
+    overflow: hidden;
   }
 
   .video-surface::before {
     content: '';
     position: absolute;
-    inset: -2px;
-    border-radius: inherit;
-    background: var(--gradient-video-border);
+    inset: -3px;
+    border-radius: 20px;
+    background: linear-gradient(135deg, hsl(271 76% 53%), hsl(217 91% 60%), hsl(271 76% 53%));
+    background-size: 200% 200%;
     z-index: -1;
     transition: var(--transition-smooth);
+    animation: gradient-flow 4s ease infinite;
+  }
+
+  @keyframes gradient-flow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
   }
 
   .video-surface:hover::before {
-    background: var(--gradient-video-hover);
-    filter: blur(2px);
+    background: linear-gradient(135deg, hsl(271 76% 63%), hsl(217 91% 70%), hsl(271 76% 63%));
+    background-size: 200% 200%;
+    filter: drop-shadow(0 0 15px hsl(271 76% 53% / 0.6));
+    animation: gradient-flow 2s ease infinite;
   }
 
   .video-surface:hover {
     background: hsl(var(--video-surface-hover));
-    box-shadow: var(--shadow-video), 0 0 30px hsl(271 76% 53% / 0.4);
+    box-shadow: 
+      var(--shadow-video), 
+      0 0 30px hsl(271 76% 53% / 0.4),
+      0 0 60px hsl(217 91% 60% / 0.2);
+    transform: translateY(-2px);
   }
 
   .control-bar {
@@ -199,17 +214,34 @@ All colors MUST be HSL.
 
   .video-grid {
     display: grid;
-    gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    grid-auto-rows: minmax(200px, 1fr);
+    gap: 1.5rem;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-auto-rows: minmax(240px, 1fr);
   }
 
   .video-grid-single {
+    display: grid;
     grid-template-columns: 1fr;
+    max-width: 800px;
+    margin: 0 auto;
   }
 
   .video-grid-dual {
+    display: grid;
     grid-template-columns: repeat(2, 1fr);
+    gap: 2rem;
+  }
+
+  @media (max-width: 768px) {
+    .video-grid {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+    
+    .video-grid-dual {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
   }
 
   .btn-control {

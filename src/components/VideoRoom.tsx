@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { VideoParticipant } from './VideoParticipant';
 import { VideoControls } from './VideoControls';
 import { useToast } from '@/hooks/use-toast';
-import { io, Socket } from 'socket.io-client';
+import { useSupabaseSignaling } from '@/hooks/useSupabaseSignaling';
 
 interface Participant {
   id: string;
@@ -26,9 +26,8 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const { toast } = useToast();
 
-  const localVideoRef = useRef<HTMLVideoElement>(null);
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const socket = useRef<Socket | null>(null);
+  const participantId = useRef(`${Date.now()}-${Math.random().toString(36).substr(2, 9)}`).current;
 
   // WebRTC Configuration
   const rtcConfig = {
@@ -38,8 +37,64 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     ]
   };
 
+  // Supabase signaling hooks
+  const { joinRoom, leaveRoom, sendSignal, getExistingParticipants } = useSupabaseSignaling({
+    roomId,
+    participantId,
+    displayName: userName,
+    onParticipantJoined: (participant) => {
+      console.log('New participant joined:', participant);
+      setParticipants(prev => {
+        if (prev.find(p => p.id === participant.participant_id)) return prev;
+        return [...prev, {
+          id: participant.participant_id,
+          name: participant.display_name,
+          isMuted: false,
+          isVideoOff: false
+        }];
+      });
+    },
+    onParticipantLeft: (participantId) => {
+      console.log('Participant left:', participantId);
+      const pc = peerConnections.current.get(participantId);
+      if (pc) {
+        pc.close();
+        peerConnections.current.delete(participantId);
+      }
+      setParticipants(prev => prev.filter(p => p.id !== participantId));
+    },
+    onSignalReceived: handleSignalReceived
+  });
+
+  // Handle signaling
+  async function handleSignalReceived(signal: any) {
+    const { sender_id, type, payload } = signal;
+    
+    try {
+      if (type === 'offer') {
+        const pc = createPeerConnection(sender_id, localStream);
+        await pc.setRemoteDescription(payload);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await sendSignal(sender_id, 'answer', answer);
+      } else if (type === 'answer') {
+        const pc = peerConnections.current.get(sender_id);
+        if (pc) {
+          await pc.setRemoteDescription(payload);
+        }
+      } else if (type === 'ice') {
+        const pc = peerConnections.current.get(sender_id);
+        if (pc) {
+          await pc.addIceCandidate(payload);
+        }
+      }
+    } catch (error) {
+      console.error('Error handling signal:', error);
+    }
+  }
+
   // Create peer connection
-  const createPeerConnection = useCallback((participantId: string, currentStream: MediaStream | null) => {
+  const createPeerConnection = useCallback((targetParticipantId: string, currentStream: MediaStream | null) => {
     const pc = new RTCPeerConnection(rtcConfig);
     
     // Add local stream to peer connection
@@ -51,11 +106,11 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
 
     // Handle incoming stream
     pc.ontrack = (event) => {
-      console.log('Received remote stream from:', participantId);
+      console.log('Received remote stream from:', targetParticipantId);
       const [remoteStream] = event.streams;
       setParticipants(prev => 
         prev.map(p => 
-          p.id === participantId 
+          p.id === targetParticipantId 
             ? { ...p, stream: remoteStream }
             : p
         )
@@ -64,24 +119,21 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
 
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
-      if (event.candidate && socket.current) {
-        socket.current.emit('ice-candidate', {
-          candidate: event.candidate,
-          to: participantId
-        });
+      if (event.candidate) {
+        sendSignal(targetParticipantId, 'ice', event.candidate);
       }
     };
 
     // Handle connection state changes
     pc.onconnectionstatechange = () => {
-      console.log(`Connection state with ${participantId}:`, pc.connectionState);
+      console.log(`Connection state with ${targetParticipantId}:`, pc.connectionState);
     };
 
-    peerConnections.current.set(participantId, pc);
+    peerConnections.current.set(targetParticipantId, pc);
     return pc;
-  }, []);
+  }, [sendSignal]);
 
-  // Initialize local media and signaling
+  // Initialize local media and join room
   useEffect(() => {
     const initializeMedia = async () => {
       try {
@@ -91,88 +143,29 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         });
         setLocalStream(stream);
         
-        // Connect to signaling server
-        socket.current = io('http://localhost:3001');
+        // Join room via Supabase
+        await joinRoom();
         
-        // Join room
-        socket.current.emit('join-room', { roomId, userName });
+        // Get existing participants and create peer connections
+        const existingParticipants = await getExistingParticipants();
+        console.log('Existing participants:', existingParticipants);
         
-        // Handle existing participants
-        socket.current.on('existing-participants', (existingParticipants) => {
-          console.log('Existing participants:', existingParticipants);
+        if (existingParticipants.length > 0) {
           setParticipants(existingParticipants.map(p => ({
-            id: p.id,
-            name: p.name,
+            id: p.participant_id,
+            name: p.display_name,
             isMuted: false,
             isVideoOff: false
           })));
           
           // Create offers for existing participants
-          existingParticipants.forEach(async (participant) => {
-            const pc = createPeerConnection(participant.id, stream);
+          for (const participant of existingParticipants) {
+            const pc = createPeerConnection(participant.participant_id, stream);
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            
-            socket.current?.emit('offer', {
-              offer,
-              to: participant.id
-            });
-          });
-        });
-        
-        // Handle new user joining
-        socket.current.on('user-joined', (data) => {
-          console.log('User joined:', data);
-          setParticipants(prev => {
-            if (prev.find(p => p.id === data.id)) return prev;
-            return [...prev, { 
-              id: data.id, 
-              name: data.name, 
-              isMuted: false, 
-              isVideoOff: false 
-            }];
-          });
-        });
-        
-        // Handle WebRTC signaling
-        socket.current.on('offer', async (data) => {
-          console.log('Received offer from:', data.from);
-          const pc = createPeerConnection(data.from, stream);
-          await pc.setRemoteDescription(data.offer);
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          
-          socket.current?.emit('answer', {
-            answer,
-            to: data.from
-          });
-        });
-        
-        socket.current.on('answer', async (data) => {
-          console.log('Received answer from:', data.from);
-          const pc = peerConnections.current.get(data.from);
-          if (pc) {
-            await pc.setRemoteDescription(data.answer);
+            await sendSignal(participant.participant_id, 'offer', offer);
           }
-        });
-        
-        socket.current.on('ice-candidate', async (data) => {
-          console.log('Received ICE candidate from:', data.from);
-          const pc = peerConnections.current.get(data.from);
-          if (pc) {
-            await pc.addIceCandidate(data.candidate);
-          }
-        });
-        
-        socket.current.on('user-left', (data) => {
-          console.log('User left:', data);
-          const pc = peerConnections.current.get(data.id);
-          if (pc) {
-            pc.close();
-            peerConnections.current.delete(data.id);
-          }
-          setParticipants(prev => prev.filter(p => p.id !== data.id));
-        });
+        }
         
         toast({
           title: "Connected to meeting",
@@ -192,9 +185,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
 
     return () => {
       // Cleanup
-      if (socket.current) {
-        socket.current.disconnect();
-      }
+      leaveRoom();
       
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
@@ -202,7 +193,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
       peerConnections.current.forEach(pc => pc.close());
       peerConnections.current.clear();
     };
-  }, [roomId, toast, userName, createPeerConnection]);
+  }, [roomId, toast, userName, createPeerConnection, joinRoom, leaveRoom, getExistingParticipants, sendSignal]);
 
   // Toggle mute
   const handleToggleMute = useCallback(() => {
@@ -246,18 +237,12 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         // Create and send new offer
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        
-        if (socket.current) {
-          socket.current.emit('offer', {
-            offer,
-            to: participantId
-          });
-        }
+        await sendSignal(participantId, 'offer', offer);
       } catch (error) {
         console.error('Error updating peer connection for participant:', participantId, error);
       }
     });
-  }, []);
+  }, [sendSignal]);
 
   // Screen sharing
   const handleToggleScreenShare = useCallback(async () => {
@@ -341,13 +326,14 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
   }, [isScreenSharing, localStream, updatePeerConnectionStreams, toast]);
 
   // Leave call
-  const handleLeaveCall = useCallback(() => {
+  const handleLeaveCall = useCallback(async () => {
     if (localStream) {
       localStream.getTracks().forEach(track => track.stop());
     }
     peerConnections.current.forEach(pc => pc.close());
+    await leaveRoom();
     onLeaveRoom();
-  }, [localStream, onLeaveRoom]);
+  }, [localStream, onLeaveRoom, leaveRoom]);
 
   // Calculate grid layout class
   const getGridClass = () => {
