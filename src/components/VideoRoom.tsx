@@ -37,21 +37,188 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     ]
   };
 
+  // Handle signaling - defined first to avoid dependency issues
+  const handleSignalReceived = useCallback(async (signal: any) => {
+    const { sender_id, type, payload } = signal;
+    console.log(`Handling ${type} signal from ${sender_id}:`, payload);
+    
+    try {
+      if (type === 'offer') {
+        console.log('Processing offer from:', sender_id);
+        let pc = peerConnections.current.get(sender_id);
+        if (!pc) {
+          // Create new peer connection for incoming offer
+          pc = new RTCPeerConnection(rtcConfig);
+          
+          // Add local stream to peer connection
+          if (localStream) {
+            console.log('Adding local tracks to peer connection for:', sender_id);
+            localStream.getTracks().forEach(track => {
+              console.log('Adding track:', track.kind, 'to peer connection for:', sender_id);
+              pc!.addTrack(track, localStream);
+            });
+          }
+
+          // Handle incoming stream
+          pc.ontrack = (event) => {
+            console.log('🎥 Received remote stream from:', sender_id, 'streams:', event.streams.length);
+            if (event.streams && event.streams[0]) {
+              const [remoteStream] = event.streams;
+              console.log('Setting remote stream for participant:', sender_id, 'tracks:', remoteStream.getTracks().length);
+              setParticipants(prev => {
+                const updated = prev.map(p => 
+                  p.id === sender_id 
+                    ? { ...p, stream: remoteStream }
+                    : p
+                );
+                console.log('Updated participants with stream:', updated);
+                return updated;
+              });
+            }
+          };
+
+          // Handle ICE candidates
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              console.log('Sending ICE candidate to:', sender_id);
+              sendSignal(sender_id, 'ice', event.candidate);
+            } else {
+              console.log('ICE gathering complete for:', sender_id);
+            }
+          };
+
+          // Handle connection state changes
+          pc.onconnectionstatechange = () => {
+            console.log(`🔄 Connection state with ${sender_id}:`, pc!.connectionState);
+            if (pc!.connectionState === 'failed') {
+              console.error('Connection failed with:', sender_id);
+            }
+          };
+
+          // Handle ICE connection state changes
+          pc.oniceconnectionstatechange = () => {
+            console.log(`🧊 ICE connection state with ${sender_id}:`, pc!.iceConnectionState);
+          };
+
+          peerConnections.current.set(sender_id, pc);
+        }
+        
+        await pc.setRemoteDescription(new RTCSessionDescription(payload));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        console.log('Sending answer to:', sender_id);
+        await sendSignal(sender_id, 'answer', answer);
+      } else if (type === 'answer') {
+        console.log('Processing answer from:', sender_id);
+        const pc = peerConnections.current.get(sender_id);
+        if (pc && pc.signalingState === 'have-local-offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(payload));
+          console.log('Answer set successfully for:', sender_id);
+        }
+      } else if (type === 'ice') {
+        console.log('Processing ICE candidate from:', sender_id);
+        const pc = peerConnections.current.get(sender_id);
+        if (pc && pc.remoteDescription) {
+          await pc.addIceCandidate(new RTCIceCandidate(payload));
+          console.log('ICE candidate added for:', sender_id);
+        }
+      }
+    } catch (error) {
+      console.error(`Error handling ${type} signal from ${sender_id}:`, error);
+    }
+  }, [localStream]);
+
+  // Create peer connection
+  const createPeerConnection = useCallback((targetParticipantId: string, currentStream: MediaStream | null) => {
+    console.log('Creating peer connection for:', targetParticipantId);
+    const pc = new RTCPeerConnection(rtcConfig);
+    
+    // Add local stream to peer connection
+    if (currentStream) {
+      console.log('Adding local tracks to peer connection for:', targetParticipantId);
+      currentStream.getTracks().forEach(track => {
+        console.log('Adding track:', track.kind, 'to peer connection for:', targetParticipantId);
+        pc.addTrack(track, currentStream);
+      });
+    }
+
+    // Handle incoming stream
+    pc.ontrack = (event) => {
+      console.log('🎥 Received remote stream from:', targetParticipantId, 'streams:', event.streams.length);
+      if (event.streams && event.streams[0]) {
+        const [remoteStream] = event.streams;
+        console.log('Setting remote stream for participant:', targetParticipantId, 'tracks:', remoteStream.getTracks().length);
+        setParticipants(prev => {
+          const updated = prev.map(p => 
+            p.id === targetParticipantId 
+              ? { ...p, stream: remoteStream }
+              : p
+          );
+          console.log('Updated participants with stream:', updated);
+          return updated;
+        });
+      }
+    };
+
+    // Handle ICE candidates
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        console.log('Sending ICE candidate to:', targetParticipantId);
+        sendSignal(targetParticipantId, 'ice', event.candidate);
+      } else {
+        console.log('ICE gathering complete for:', targetParticipantId);
+      }
+    };
+
+    // Handle connection state changes
+    pc.onconnectionstatechange = () => {
+      console.log(`🔄 Connection state with ${targetParticipantId}:`, pc.connectionState);
+      if (pc.connectionState === 'failed') {
+        console.error('Connection failed with:', targetParticipantId);
+      }
+    };
+
+    // Handle ICE connection state changes
+    pc.oniceconnectionstatechange = () => {
+      console.log(`🧊 ICE connection state with ${targetParticipantId}:`, pc.iceConnectionState);
+    };
+
+    peerConnections.current.set(targetParticipantId, pc);
+    return pc;
+  }, []);
+
   // Supabase signaling hooks
   const { joinRoom, leaveRoom, sendSignal, getExistingParticipants } = useSupabaseSignaling({
     roomId,
     participantId,
     displayName: userName,
     onParticipantJoined: (participant) => {
-      console.log('New participant joined:', participant);
+      console.log('🙋 New participant joined:', participant);
       setParticipants(prev => {
         if (prev.find(p => p.id === participant.participant_id)) return prev;
-        return [...prev, {
+        const newParticipants = [...prev, {
           id: participant.participant_id,
           name: participant.display_name,
           isMuted: false,
           isVideoOff: false
         }];
+        
+        // Create peer connection for new participant if we have local stream
+        if (localStream) {
+          setTimeout(async () => {
+            console.log('🤝 Creating peer connection for new participant:', participant.participant_id);
+            const pc = createPeerConnection(participant.participant_id, localStream);
+            const offer = await pc.createOffer({
+              offerToReceiveAudio: true,
+              offerToReceiveVideo: true
+            });
+            await pc.setLocalDescription(offer);
+            console.log('📤 Sending offer to new participant:', participant.participant_id);
+            await sendSignal(participant.participant_id, 'offer', offer);
+          }, 500);
+        }
+        
+        return newParticipants;
       });
     },
     onParticipantLeft: (participantId) => {
@@ -65,73 +232,6 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     },
     onSignalReceived: handleSignalReceived
   });
-
-  // Handle signaling
-  async function handleSignalReceived(signal: any) {
-    const { sender_id, type, payload } = signal;
-    
-    try {
-      if (type === 'offer') {
-        const pc = createPeerConnection(sender_id, localStream);
-        await pc.setRemoteDescription(payload);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        await sendSignal(sender_id, 'answer', answer);
-      } else if (type === 'answer') {
-        const pc = peerConnections.current.get(sender_id);
-        if (pc) {
-          await pc.setRemoteDescription(payload);
-        }
-      } else if (type === 'ice') {
-        const pc = peerConnections.current.get(sender_id);
-        if (pc) {
-          await pc.addIceCandidate(payload);
-        }
-      }
-    } catch (error) {
-      console.error('Error handling signal:', error);
-    }
-  }
-
-  // Create peer connection
-  const createPeerConnection = useCallback((targetParticipantId: string, currentStream: MediaStream | null) => {
-    const pc = new RTCPeerConnection(rtcConfig);
-    
-    // Add local stream to peer connection
-    if (currentStream) {
-      currentStream.getTracks().forEach(track => {
-        pc.addTrack(track, currentStream);
-      });
-    }
-
-    // Handle incoming stream
-    pc.ontrack = (event) => {
-      console.log('Received remote stream from:', targetParticipantId);
-      const [remoteStream] = event.streams;
-      setParticipants(prev => 
-        prev.map(p => 
-          p.id === targetParticipantId 
-            ? { ...p, stream: remoteStream }
-            : p
-        )
-      );
-    };
-
-    // Handle ICE candidates
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        sendSignal(targetParticipantId, 'ice', event.candidate);
-      }
-    };
-
-    // Handle connection state changes
-    pc.onconnectionstatechange = () => {
-      console.log(`Connection state with ${targetParticipantId}:`, pc.connectionState);
-    };
-
-    peerConnections.current.set(targetParticipantId, pc);
-    return pc;
-  }, [sendSignal]);
 
   // Initialize local media and join room
   useEffect(() => {
@@ -158,13 +258,22 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
             isVideoOff: false
           })));
           
-          // Create offers for existing participants
-          for (const participant of existingParticipants) {
-            const pc = createPeerConnection(participant.participant_id, stream);
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            await sendSignal(participant.participant_id, 'offer', offer);
-          }
+          // Create offers for existing participants with proper timing
+          setTimeout(async () => {
+            for (const participant of existingParticipants) {
+              console.log('🚀 Creating offer for existing participant:', participant.participant_id);
+              const pc = createPeerConnection(participant.participant_id, stream);
+              
+              // Wait for ICE gathering to complete
+              const offer = await pc.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true
+              });
+              await pc.setLocalDescription(offer);
+              console.log('📤 Sending offer to:', participant.participant_id);
+              await sendSignal(participant.participant_id, 'offer', offer);
+            }
+          }, 1000);
         }
         
         toast({

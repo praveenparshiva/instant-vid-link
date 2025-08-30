@@ -33,6 +33,8 @@ export const VideoParticipant = ({
           muted={isLocal}
           playsInline
           className="w-full h-full object-cover"
+          onLoadedMetadata={() => console.log('Video metadata loaded for:', name)}
+          onError={(e) => console.error('Video error for:', name, e)}
         />
       ) : (
         <div className="w-full h-full bg-video-surface flex items-center justify-center">
