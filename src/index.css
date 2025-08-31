@@ -270,4 +270,31 @@ All colors MUST be HSL.
   .btn-control.danger:hover {
     background: hsl(var(--destructive) / 0.8);
   }
+
+  /* Pinned video layout */
+  .video-grid-pinned {
+    @apply relative w-full h-screen flex flex-col;
+  }
+
+  .video-thumbnails {
+    @apply absolute bottom-6 right-6 flex gap-3 max-w-sm z-30;
+  }
+
+  .video-surface-pinned {
+    @apply flex-1 w-full h-full;
+  }
+
+  .video-surface-thumbnail {
+    @apply w-32 h-20 flex-shrink-0;
+  }
+
+  @media (max-width: 768px) {
+    .video-thumbnails {
+      @apply bottom-3 right-3 gap-2;
+    }
+
+    .video-surface-thumbnail {
+      @apply w-24 h-16;
+    }
+  }
 }

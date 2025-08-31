@@ -24,6 +24,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [pinnedParticipant, setPinnedParticipant] = useState<string | null>(null);
   const { toast } = useToast();
 
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -209,7 +210,8 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         
         // Create peer connection for new participant if we have local stream
         if (localStream) {
-          (async () => {
+          // Small delay to ensure stream is ready
+          setTimeout(async () => {
             console.log('🤝 Creating peer connection for new participant:', participant.participant_id, 'local stream tracks:', localStream.getTracks().length);
             const pc = createPeerConnection(participant.participant_id, localStream);
             const offer = await pc.createOffer({
@@ -219,7 +221,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
             await pc.setLocalDescription(offer);
             console.log('📤 Sending offer to new participant:', participant.participant_id, 'offer SDP length:', offer.sdp?.length);
             await sendSignal(participant.participant_id, 'offer', offer);
-          })();
+          }, 100);
         } else {
           console.warn('⚠️ No local stream available for new participant:', participant.participant_id);
         }
@@ -266,18 +268,21 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
           
           // Create offers for existing participants - ensure stream is ready
           console.log('🎯 Creating peer connections for existing participants with stream tracks:', stream.getTracks().length);
-          for (const participant of existingParticipants) {
-            console.log('🚀 Creating offer for existing participant:', participant.participant_id);
-            const pc = createPeerConnection(participant.participant_id, stream);
-            
-            const offer = await pc.createOffer({
-              offerToReceiveAudio: true,
-              offerToReceiveVideo: true
-            });
-            await pc.setLocalDescription(offer);
-            console.log('📤 Sending offer to existing participant:', participant.participant_id, 'offer SDP length:', offer.sdp?.length);
-            await sendSignal(participant.participant_id, 'offer', offer);
-          }
+          // Add delay to ensure stream tracks are fully ready
+          setTimeout(async () => {
+            for (const participant of existingParticipants) {
+              console.log('🚀 Creating offer for existing participant:', participant.participant_id);
+              const pc = createPeerConnection(participant.participant_id, stream);
+              
+              const offer = await pc.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true
+              });
+              await pc.setLocalDescription(offer);
+              console.log('📤 Sending offer to existing participant:', participant.participant_id, 'offer SDP length:', offer.sdp?.length);
+              await sendSignal(participant.participant_id, 'offer', offer);
+            }
+          }, 200);
         }
         
         toast({
@@ -450,10 +455,16 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
 
   // Calculate grid layout class
   const getGridClass = () => {
+    if (pinnedParticipant) return 'video-grid-pinned';
     const totalParticipants = participants.length + 1; // +1 for local user
     if (totalParticipants === 1) return 'video-grid-single';
     if (totalParticipants === 2) return 'video-grid-dual';
     return 'video-grid';
+  };
+
+  // Handle pin/unpin participant
+  const handlePinParticipant = (participantId: string) => {
+    setPinnedParticipant(pinnedParticipant === participantId ? null : participantId);
   };
 
   return (
@@ -473,25 +484,88 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
       {/* Video Grid */}
       <div className="p-6 pt-20">
         <div className={`${getGridClass()} max-w-7xl mx-auto`}>
-          {/* Local video */}
-          <VideoParticipant
-            stream={localStream || undefined}
-            name={userName}
-            isMuted={isMuted}
-            isVideoOff={isVideoOff}
-            isLocal={true}
-          />
-          
-          {/* Remote participants */}
-          {participants.map((participant) => (
-            <VideoParticipant
-              key={participant.id}
-              stream={participant.stream}
-              name={participant.name}
-              isMuted={participant.isMuted}
-              isVideoOff={participant.isVideoOff}
-            />
-          ))}
+          {pinnedParticipant ? (
+            <>
+              {/* Pinned participant (full screen) */}
+              {pinnedParticipant === 'local' ? (
+                <VideoParticipant
+                  stream={localStream || undefined}
+                  name={userName}
+                  isMuted={isMuted}
+                  isVideoOff={isVideoOff}
+                  isLocal={true}
+                  isPinned={true}
+                  onPin={() => handlePinParticipant('local')}
+                />
+              ) : (
+                participants
+                  .filter(p => p.id === pinnedParticipant)
+                  .map((participant) => (
+                    <VideoParticipant
+                      key={participant.id}
+                      stream={participant.stream}
+                      name={participant.name}
+                      isMuted={participant.isMuted}
+                      isVideoOff={participant.isVideoOff}
+                      isPinned={true}
+                      onPin={() => handlePinParticipant(participant.id)}
+                    />
+                  ))
+              )}
+              
+              {/* Thumbnail grid for other participants */}
+              <div className="video-thumbnails">
+                {pinnedParticipant !== 'local' && (
+                  <VideoParticipant
+                    stream={localStream || undefined}
+                    name={userName}
+                    isMuted={isMuted}
+                    isVideoOff={isVideoOff}
+                    isLocal={true}
+                    isThumbnail={true}
+                    onPin={() => handlePinParticipant('local')}
+                  />
+                )}
+                {participants
+                  .filter(p => p.id !== pinnedParticipant)
+                  .map((participant) => (
+                    <VideoParticipant
+                      key={participant.id}
+                      stream={participant.stream}
+                      name={participant.name}
+                      isMuted={participant.isMuted}
+                      isVideoOff={participant.isVideoOff}
+                      isThumbnail={true}
+                      onPin={() => handlePinParticipant(participant.id)}
+                    />
+                  ))}
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Local video */}
+              <VideoParticipant
+                stream={localStream || undefined}
+                name={userName}
+                isMuted={isMuted}
+                isVideoOff={isVideoOff}
+                isLocal={true}
+                onPin={() => handlePinParticipant('local')}
+              />
+              
+              {/* Remote participants */}
+              {participants.map((participant) => (
+                <VideoParticipant
+                  key={participant.id}
+                  stream={participant.stream}
+                  name={participant.name}
+                  isMuted={participant.isMuted}
+                  isVideoOff={participant.isVideoOff}
+                  onPin={() => handlePinParticipant(participant.id)}
+                />
+              ))}
+            </>
+          )}
         </div>
       </div>
 
