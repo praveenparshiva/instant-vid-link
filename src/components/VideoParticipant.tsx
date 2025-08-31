@@ -26,9 +26,25 @@ export const VideoParticipant = ({
 
   useEffect(() => {
     if (videoRef.current && stream) {
+      console.log('🎥 Setting video stream for participant:', name, 'tracks:', stream.getTracks().length);
       videoRef.current.srcObject = stream;
+      
+      // Ensure video plays on mobile
+      const playVideo = async () => {
+        try {
+          await videoRef.current?.play();
+          console.log('✅ Video playing for:', name);
+        } catch (error) {
+          console.log('Video autoplay failed for:', name, 'this is normal on some browsers');
+        }
+      };
+      
+      playVideo();
+    } else if (videoRef.current && !stream) {
+      console.log('🚫 Clearing video stream for participant:', name);
+      videoRef.current.srcObject = null;
     }
-  }, [stream]);
+  }, [stream, name]);
 
   const containerClass = isPinned 
     ? "video-surface-pinned relative rounded-xl overflow-hidden w-full h-full" 

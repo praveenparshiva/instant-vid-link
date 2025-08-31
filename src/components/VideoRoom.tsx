@@ -313,54 +313,125 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     };
   }, [roomId, toast, userName, createPeerConnection, joinRoom, leaveRoom, getExistingParticipants, sendSignal]);
 
-  // Toggle mute
-  const handleToggleMute = useCallback(() => {
-    if (localStream) {
-      const audioTrack = localStream.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setIsMuted(!audioTrack.enabled);
-      }
-    }
-  }, [localStream]);
-
-  // Toggle video
-  const handleToggleVideo = useCallback(() => {
-    if (localStream) {
-      const videoTrack = localStream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled;
-        setIsVideoOff(!videoTrack.enabled);
-      }
-    }
-  }, [localStream]);
-
   // Update all peer connections with new stream
   const updatePeerConnectionStreams = useCallback((newStream: MediaStream) => {
+    console.log('🔄 Updating peer connections with new stream, tracks:', newStream.getTracks().length);
+    
     peerConnections.current.forEach(async (pc, participantId) => {
       try {
         // Remove old tracks
         const senders = pc.getSenders();
         for (const sender of senders) {
           if (sender.track) {
+            console.log('🗑️ Removing old track:', sender.track.kind, 'for participant:', participantId);
             pc.removeTrack(sender);
           }
         }
         
         // Add new tracks
         newStream.getTracks().forEach(track => {
+          console.log('➕ Adding new track:', track.kind, 'enabled:', track.enabled, 'to participant:', participantId);
           pc.addTrack(track, newStream);
         });
 
-        // Create and send new offer
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await sendSignal(participantId, 'offer', offer);
+        // Only renegotiate if connection is stable
+        if (pc.connectionState === 'connected' || pc.connectionState === 'new') {
+          console.log('🤝 Renegotiating with participant:', participantId);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          await sendSignal(participantId, 'offer', offer);
+        }
       } catch (error) {
         console.error('Error updating peer connection for participant:', participantId, error);
       }
     });
   }, [sendSignal]);
+
+  // Toggle mute
+  const handleToggleMute = useCallback(async () => {
+    if (localStream) {
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        // Check if track is stopped
+        if (audioTrack.readyState === 'ended') {
+          console.log('Audio track was stopped, recreating stream...');
+          try {
+            // Stop all tracks and recreate
+            localStream.getTracks().forEach(track => track.stop());
+            
+            const newStream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: true,
+            });
+            
+            setLocalStream(newStream);
+            setIsMuted(false);
+            setIsVideoOff(!newStream.getVideoTracks()[0]?.enabled);
+            
+            // Update all peer connections
+            updatePeerConnectionStreams(newStream);
+          } catch (error) {
+            console.error('Error recreating audio stream:', error);
+          }
+        } else {
+          audioTrack.enabled = !audioTrack.enabled;
+          setIsMuted(!audioTrack.enabled);
+          
+          // Update peer connections to notify about audio state change
+          updatePeerConnectionStreams(localStream);
+        }
+      }
+    }
+  }, [localStream, updatePeerConnectionStreams]);
+
+  // Toggle video
+  const handleToggleVideo = useCallback(async () => {
+    if (localStream) {
+      const videoTrack = localStream.getVideoTracks()[0];
+      if (videoTrack) {
+        // Check if track is stopped (readyState === 'ended')
+        if (videoTrack.readyState === 'ended') {
+          console.log('Video track was stopped, recreating stream...');
+          try {
+            // Stop all tracks in current stream
+            localStream.getTracks().forEach(track => track.stop());
+            
+            // Create new stream with video enabled
+            const newStream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: true,
+            });
+            
+            setLocalStream(newStream);
+            setIsVideoOff(false);
+            setIsMuted(!newStream.getAudioTracks()[0]?.enabled);
+            
+            // Update all peer connections with new stream
+            updatePeerConnectionStreams(newStream);
+            
+            toast({
+              title: "Camera reactivated",
+              description: "Your camera is now working again",
+            });
+          } catch (error) {
+            console.error('Error recreating video stream:', error);
+            toast({
+              title: "Camera error",
+              description: "Unable to restart camera. Please check permissions.",
+              variant: "destructive",
+            });
+          }
+        } else {
+          // Simply toggle the track enabled state
+          videoTrack.enabled = !videoTrack.enabled;
+          setIsVideoOff(!videoTrack.enabled);
+          
+          // Notify peers about track state change by updating connections
+          updatePeerConnectionStreams(localStream);
+        }
+      }
+    }
+  }, [localStream, updatePeerConnectionStreams, toast]);
 
   // Screen sharing
   const handleToggleScreenShare = useCallback(async () => {
