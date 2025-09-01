@@ -82,7 +82,9 @@ export const VideoParticipant = ({
             e.stopPropagation();
             onPin();
           }}
-          className="absolute top-3 right-3 bg-black/60 hover:bg-black/80 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+          className={`absolute top-3 right-3 bg-black/60 hover:bg-black/80 text-white p-2 rounded-lg transition-opacity ${
+            isPinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+          }`}
         >
           <Pin className="w-4 h-4" />
         </button>

@@ -51,34 +51,46 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
           // Create new peer connection for incoming offer
           pc = new RTCPeerConnection(rtcConfig);
           
-          // Add local stream to peer connection
-          if (localStream) {
-            console.log('📹 Adding local tracks to incoming offer peer connection for:', sender_id, 'tracks:', localStream.getTracks().length);
-            localStream.getTracks().forEach(track => {
-              console.log('➕ Adding track:', track.kind, 'enabled:', track.enabled, 'to peer connection for:', sender_id);
-              pc!.addTrack(track, localStream);
-            });
-          } else {
-            console.warn('⚠️ No local stream available when processing offer from:', sender_id);
-          }
-
-          // Handle incoming stream
+          // CRITICAL: Set up ontrack handler FIRST
           pc.ontrack = (event) => {
             console.log('🎥 Received remote stream from:', sender_id, 'streams:', event.streams.length);
             if (event.streams && event.streams[0]) {
               const [remoteStream] = event.streams;
-              console.log('Setting remote stream for participant:', sender_id, 'tracks:', remoteStream.getTracks().length);
+              console.log('🎯 Setting remote stream for participant:', sender_id, 'tracks:', remoteStream.getTracks().length);
+              
+              // Log track details for debugging
+              remoteStream.getTracks().forEach(track => {
+                console.log(`📡 Remote ${track.kind} track:`, track.id, 'enabled:', track.enabled, 'muted:', track.muted, 'state:', track.readyState);
+              });
+              
               setParticipants(prev => {
                 const updated = prev.map(p => 
                   p.id === sender_id 
                     ? { ...p, stream: remoteStream }
                     : p
                 );
-                console.log('Updated participants with stream:', updated);
+                console.log('✅ Updated participants with stream:', updated.find(p => p.id === sender_id));
                 return updated;
               });
+            } else {
+              console.warn('⚠️ No stream received in track event from:', sender_id);
             }
           };
+          
+          // Add local stream to peer connection AFTER setting up handlers
+          if (localStream && localStream.getTracks().length > 0) {
+            console.log('📹 Adding local tracks to incoming offer peer connection for:', sender_id, 'tracks:', localStream.getTracks().length);
+            localStream.getTracks().forEach(track => {
+              if (track.readyState === 'live') {
+                console.log('➕ Adding live track:', track.kind, 'enabled:', track.enabled, 'to peer connection for:', sender_id);
+                pc!.addTrack(track, localStream);
+              } else {
+                console.warn('⚠️ Skipping dead track:', track.kind, 'state:', track.readyState);
+              }
+            });
+          } else {
+            console.warn('⚠️ No local stream or tracks available when processing offer from:', sender_id);
+          }
 
           // Handle ICE candidates
           pc.onicecandidate = (event) => {
@@ -136,34 +148,42 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     console.log('🔗 Creating peer connection for:', targetParticipantId);
     const pc = new RTCPeerConnection(rtcConfig);
     
-    // Add local stream to peer connection IMMEDIATELY
-    if (currentStream) {
-      console.log('📹 Adding local tracks to peer connection for:', targetParticipantId, 'tracks:', currentStream.getTracks().length);
-      currentStream.getTracks().forEach(track => {
-        console.log('➕ Adding track:', track.kind, 'enabled:', track.enabled, 'to peer connection for:', targetParticipantId);
-        pc.addTrack(track, currentStream);
-      });
-    } else {
-      console.warn('⚠️ No local stream available when creating peer connection for:', targetParticipantId);
-    }
-
-    // Handle incoming stream
+    // CRITICAL: Set up ontrack handler FIRST before adding any tracks
     pc.ontrack = (event) => {
       console.log('🎥 Received remote stream from:', targetParticipantId, 'streams:', event.streams.length);
       if (event.streams && event.streams[0]) {
         const [remoteStream] = event.streams;
-        console.log('Setting remote stream for participant:', targetParticipantId, 'tracks:', remoteStream.getTracks().length);
+        console.log('🎯 Setting remote stream for participant:', targetParticipantId, 'tracks:', remoteStream.getTracks().length);
+        
+        // Force immediate update of participant stream
         setParticipants(prev => {
           const updated = prev.map(p => 
             p.id === targetParticipantId 
               ? { ...p, stream: remoteStream }
               : p
           );
-          console.log('Updated participants with stream:', updated);
+          console.log('✅ Updated participants with stream:', updated.find(p => p.id === targetParticipantId));
           return updated;
         });
+      } else {
+        console.warn('⚠️ No stream received in track event from:', targetParticipantId);
       }
     };
+    
+    // Add local stream to peer connection AFTER setting up handlers
+    if (currentStream && currentStream.getTracks().length > 0) {
+      console.log('📹 Adding local tracks to peer connection for:', targetParticipantId, 'tracks:', currentStream.getTracks().length);
+      currentStream.getTracks().forEach(track => {
+        if (track.readyState === 'live') {
+          console.log('➕ Adding live track:', track.kind, 'enabled:', track.enabled, 'to peer connection for:', targetParticipantId);
+          pc.addTrack(track, currentStream);
+        } else {
+          console.warn('⚠️ Skipping dead track:', track.kind, 'state:', track.readyState);
+        }
+      });
+    } else {
+      console.warn('⚠️ No local stream or tracks available when creating peer connection for:', targetParticipantId);
+    }
 
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
@@ -209,21 +229,24 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         }];
         
         // Create peer connection for new participant if we have local stream
-        if (localStream) {
+        if (localStream && localStream.getTracks().length > 0) {
           // Small delay to ensure stream is ready
           setTimeout(async () => {
             console.log('🤝 Creating peer connection for new participant:', participant.participant_id, 'local stream tracks:', localStream.getTracks().length);
             const pc = createPeerConnection(participant.participant_id, localStream);
+            
+            // Create offer with explicit constraints
             const offer = await pc.createOffer({
               offerToReceiveAudio: true,
-              offerToReceiveVideo: true
+              offerToReceiveVideo: true,
+              iceRestart: false
             });
             await pc.setLocalDescription(offer);
-            console.log('📤 Sending offer to new participant:', participant.participant_id, 'offer SDP length:', offer.sdp?.length);
+            console.log('📤 Sending offer to new participant:', participant.participant_id, 'tracks in offer:', pc.getSenders().length);
             await sendSignal(participant.participant_id, 'offer', offer);
           }, 100);
         } else {
-          console.warn('⚠️ No local stream available for new participant:', participant.participant_id);
+          console.warn('⚠️ No local stream or tracks available for new participant:', participant.participant_id);
         }
         
         return newParticipants;
@@ -271,18 +294,23 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
           // Add delay to ensure stream tracks are fully ready
           setTimeout(async () => {
             for (const participant of existingParticipants) {
-              console.log('🚀 Creating offer for existing participant:', participant.participant_id);
-              const pc = createPeerConnection(participant.participant_id, stream);
-              
-              const offer = await pc.createOffer({
-                offerToReceiveAudio: true,
-                offerToReceiveVideo: true
-              });
-              await pc.setLocalDescription(offer);
-              console.log('📤 Sending offer to existing participant:', participant.participant_id, 'offer SDP length:', offer.sdp?.length);
-              await sendSignal(participant.participant_id, 'offer', offer);
+              try {
+                console.log('🚀 Creating offer for existing participant:', participant.participant_id);
+                const pc = createPeerConnection(participant.participant_id, stream);
+                
+                const offer = await pc.createOffer({
+                  offerToReceiveAudio: true,
+                  offerToReceiveVideo: true,
+                  iceRestart: false
+                });
+                await pc.setLocalDescription(offer);
+                console.log('📤 Sending offer to existing participant:', participant.participant_id, 'tracks in offer:', pc.getSenders().length);
+                await sendSignal(participant.participant_id, 'offer', offer);
+              } catch (error) {
+                console.error('❌ Failed to create offer for existing participant:', participant.participant_id, error);
+              }
             }
-          }, 200);
+          }, 300);
         }
         
         toast({
