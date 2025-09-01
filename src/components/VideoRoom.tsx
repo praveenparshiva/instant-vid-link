@@ -269,8 +269,18 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     const initializeMedia = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 }
+          },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 48000,
+            channelCount: 1
+          },
         });
         setLocalStream(stream);
         
@@ -399,8 +409,18 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
           try {
             // Create new stream
             const newStream = await navigator.mediaDevices.getUserMedia({
-              video: !isVideoOff,
-              audio: true,
+              video: !isVideoOff ? {
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                frameRate: { ideal: 30 }
+              } : false,
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                sampleRate: 48000,
+                channelCount: 1
+              },
             });
             
             setLocalStream(newStream);
@@ -436,8 +456,18 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         console.log('Video track was stopped, recreating stream...');
         try {
           const newStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: !isMuted,
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              frameRate: { ideal: 30 }
+            },
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              sampleRate: 48000,
+              channelCount: 1
+            },
           });
           
           setLocalStream(newStream);
@@ -473,8 +503,18 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         console.log('No video track found, creating new stream...');
         try {
           const newStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: !isMuted,
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              frameRate: { ideal: 30 }
+            },
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              sampleRate: 48000,
+              channelCount: 1
+            },
           });
           
           setLocalStream(newStream);
@@ -503,8 +543,18 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         }
         
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 }
+          },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 48000,
+            channelCount: 1
+          },
         });
         setLocalStream(stream);
         setIsScreenSharing(false);
@@ -519,20 +569,56 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
           description: "Switched back to camera",
         });
       } else {
-        // Start screen sharing
+        // Start screen sharing - KEEP MICROPHONE AUDIO
+        const currentAudioTrack = localStream ? localStream.getAudioTracks()[0] : null;
+        
         if (localStream) {
-          localStream.getTracks().forEach(track => track.stop());
+          // Only stop video tracks, keep audio
+          localStream.getVideoTracks().forEach(track => track.stop());
         }
         
         const screenStream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
-          audio: false, // Don't capture system audio by default
+          audio: false, // We'll keep the existing microphone audio
         });
-        setLocalStream(screenStream);
+        
+        // Create combined stream with screen video + microphone audio
+        const combinedStream = new MediaStream();
+        
+        // Add screen video track
+        screenStream.getVideoTracks().forEach(track => {
+          combinedStream.addTrack(track);
+        });
+        
+        // Add existing microphone audio track or create new one
+        if (currentAudioTrack && currentAudioTrack.readyState === 'live') {
+          console.log('🎤 Keeping existing microphone audio during screen share');
+          combinedStream.addTrack(currentAudioTrack);
+        } else {
+          console.log('🎤 Creating new microphone audio for screen share');
+          try {
+            const micStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                sampleRate: 48000,
+                channelCount: 1
+              }
+            });
+            micStream.getAudioTracks().forEach(track => {
+              combinedStream.addTrack(track);
+            });
+          } catch (audioError) {
+            console.warn('⚠️ Could not get microphone for screen share:', audioError);
+          }
+        }
+        
+        setLocalStream(combinedStream);
         setIsScreenSharing(true);
         
-        // Update all peer connections with screen share stream
-        updatePeerConnectionStreams(screenStream);
+        // Update all peer connections with combined stream
+        updatePeerConnectionStreams(combinedStream);
         
         toast({
           title: "Screen sharing started",
@@ -544,8 +630,18 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
           console.log('Screen sharing ended by user');
           try {
             const cameraStream = await navigator.mediaDevices.getUserMedia({
-              video: true,
-              audio: true,
+              video: {
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                frameRate: { ideal: 30 }
+              },
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                sampleRate: 48000,
+                channelCount: 1
+              },
             });
             setLocalStream(cameraStream);
             setIsScreenSharing(false);
