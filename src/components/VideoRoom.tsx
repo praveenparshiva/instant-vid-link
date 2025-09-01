@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { VideoParticipant } from './VideoParticipant';
 import { VideoControls } from './VideoControls';
+import { Chat } from './Chat';
 import { useToast } from '@/hooks/use-toast';
 import { useSupabaseSignaling } from '@/hooks/useSupabaseSignaling';
 
@@ -25,6 +26,14 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [pinnedParticipant, setPinnedParticipant] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<Array<{
+    id: string;
+    sender_id: string;
+    sender_name: string;
+    text: string;
+    timestamp: string;
+  }>>([]);
+  const [isChatMinimized, setIsChatMinimized] = useState(true);
   const { toast } = useToast();
 
   // One RTCPeerConnection per remote participant
@@ -103,7 +112,7 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
   }, []);
 
   // ---- signaling (Supabase) ----
-  const { joinRoom, leaveRoom, sendSignal, getExistingParticipants } = useSupabaseSignaling({
+  const { joinRoom, leaveRoom, sendSignal, sendChatMessage, getExistingParticipants } = useSupabaseSignaling({
     roomId,
     participantId,
     displayName: userName,
@@ -140,6 +149,15 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
       iceQueue.current.delete(id);
     },
     onSignalReceived: (signal) => handleSignalReceived(signal),
+    onChatMessage: (message) => {
+      setChatMessages(prev => [...prev, message]);
+      if (isChatMinimized) {
+        toast({ 
+          title: 'New message', 
+          description: `${message.sender_name}: ${message.text.slice(0, 50)}${message.text.length > 50 ? '...' : ''}` 
+        });
+      }
+    },
   });
 
   // ---- create peer connection ----
@@ -461,6 +479,18 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
     onLeaveRoom();
   }, [localStream, onLeaveRoom, leaveRoom]);
 
+  const handleSendChatMessage = useCallback((text: string) => {
+    sendChatMessage(text);
+    // Add own message to local state immediately
+    setChatMessages(prev => [...prev, {
+      id: `local-${Date.now()}`,
+      sender_id: participantId,
+      sender_name: userName,
+      text,
+      timestamp: new Date().toISOString()
+    }]);
+  }, [sendChatMessage, participantId, userName]);
+
   // ---- layout helpers ----
   const getGridClass = () => {
     if (pinnedParticipant) return 'video-grid-pinned';
@@ -578,6 +608,15 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
         onToggleVideo={handleToggleVideo}
         onToggleScreenShare={handleToggleScreenShare}
         onLeaveCall={handleLeaveCall}
+      />
+
+      {/* Chat */}
+      <Chat
+        messages={chatMessages}
+        onSendMessage={handleSendChatMessage}
+        currentUserId={participantId}
+        isMinimized={isChatMinimized}
+        onToggleMinimize={() => setIsChatMinimized(!isChatMinimized)}
       />
     </div>
   );

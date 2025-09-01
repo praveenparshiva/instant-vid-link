@@ -15,7 +15,7 @@ interface Signal {
   room_id: string;
   sender_id: string;
   target_id: string | null;
-  type: 'offer' | 'answer' | 'ice';
+  type: 'offer' | 'answer' | 'ice' | 'chat';
   payload: any;
   created_at: string;
 }
@@ -27,6 +27,7 @@ interface UseSupabaseSignalingProps {
   onParticipantJoined: (participant: Participant) => void;
   onParticipantLeft: (participantId: string) => void;
   onSignalReceived: (signal: Signal) => void;
+  onChatMessage?: (message: { id: string; sender_id: string; sender_name: string; text: string; timestamp: string }) => void;
 }
 
 export const useSupabaseSignaling = ({
@@ -35,7 +36,8 @@ export const useSupabaseSignaling = ({
   displayName,
   onParticipantJoined,
   onParticipantLeft,
-  onSignalReceived
+  onSignalReceived,
+  onChatMessage
 }: UseSupabaseSignalingProps) => {
   const channelRef = useRef<RealtimeChannel | null>(null);
   const isJoined = useRef(false);
@@ -88,7 +90,7 @@ export const useSupabaseSignaling = ({
   }, [roomId, participantId]);
 
   // Send signal
-  const sendSignal = useCallback(async (targetId: string | null, type: 'offer' | 'answer' | 'ice', payload: any) => {
+  const sendSignal = useCallback(async (targetId: string | null, type: 'offer' | 'answer' | 'ice' | 'chat', payload: any) => {
     try {
       await supabase
         .from('signals')
@@ -103,6 +105,15 @@ export const useSupabaseSignaling = ({
       console.error('Error sending signal:', error);
     }
   }, [roomId, participantId]);
+
+  // Send chat message
+  const sendChatMessage = useCallback(async (text: string) => {
+    try {
+      await sendSignal(null, 'chat', { text, sender_name: displayName });
+    } catch (error) {
+      console.error('Error sending chat message:', error);
+    }
+  }, [sendSignal, displayName]);
 
   // Get existing participants
   const getExistingParticipants = useCallback(async () => {
@@ -169,7 +180,17 @@ export const useSupabaseSignaling = ({
           if (signal.sender_id !== participantId && 
               (signal.target_id === participantId || signal.target_id === null)) {
             console.log('Signal received:', signal);
-            onSignalReceived(signal);
+            if (signal.type === 'chat' && onChatMessage) {
+              onChatMessage({
+                id: signal.id,
+                sender_id: signal.sender_id,
+                sender_name: signal.payload.sender_name,
+                text: signal.payload.text,
+                timestamp: signal.created_at
+              });
+            } else {
+              onSignalReceived(signal);
+            }
           }
         }
       )
@@ -180,12 +201,13 @@ export const useSupabaseSignaling = ({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [roomId, participantId, onParticipantJoined, onParticipantLeft, onSignalReceived]);
+  }, [roomId, participantId, onParticipantJoined, onParticipantLeft, onSignalReceived, onChatMessage]);
 
   return {
     joinRoom,
     leaveRoom,
     sendSignal,
+    sendChatMessage,
     getExistingParticipants
   };
 };
