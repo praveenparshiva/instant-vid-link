@@ -27,720 +27,496 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
   const [pinnedParticipant, setPinnedParticipant] = useState<string | null>(null);
   const { toast } = useToast();
 
+  // One RTCPeerConnection per remote participant
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
+  // Queue ICE candidates that arrive before remoteDescription is set
+  const iceQueue = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const participantId = useRef(`${Date.now()}-${Math.random().toString(36).substr(2, 9)}`).current;
 
-  // WebRTC Configuration
-  const rtcConfig = {
+  const rtcConfig: RTCConfiguration = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
-    ]
+      { urls: 'stun:stun1.l.google.com:19302' },
+    ],
   };
 
-  // Handle signaling - defined first to avoid dependency issues
-  const handleSignalReceived = useCallback(async (signal: any) => {
-    const { sender_id, type, payload } = signal;
-    console.log(`Handling ${type} signal from ${sender_id}:`, payload);
-    
-    try {
-      if (type === 'offer') {
-        console.log('Processing offer from:', sender_id);
-        let pc = peerConnections.current.get(sender_id);
-        if (!pc) {
-          // Create new peer connection for incoming offer
-          pc = new RTCPeerConnection(rtcConfig);
-          
-          // CRITICAL: Set up ontrack handler FIRST
-          pc.ontrack = (event) => {
-            console.log('🎥 Received remote stream from:', sender_id, 'streams:', event.streams.length);
-            if (event.streams && event.streams[0]) {
-              const [remoteStream] = event.streams;
-              console.log('🎯 Setting remote stream for participant:', sender_id, 'tracks:', remoteStream.getTracks().length);
-              
-              // Log track details for debugging
-              remoteStream.getTracks().forEach(track => {
-                console.log(`📡 Remote ${track.kind} track:`, track.id, 'enabled:', track.enabled, 'muted:', track.muted, 'state:', track.readyState);
-              });
-              
-              setParticipants(prev => {
-                const updated = prev.map(p => 
-                  p.id === sender_id 
-                    ? { ...p, stream: remoteStream }
-                    : p
-                );
-                console.log('✅ Updated participants with stream:', updated.find(p => p.id === sender_id));
-                return updated;
-              });
-            } else {
-              console.warn('⚠️ No stream received in track event from:', sender_id);
-            }
-          };
-          
-          // Add local stream to peer connection AFTER setting up handlers
-          if (localStream && localStream.getTracks().length > 0) {
-            console.log('📹 Adding local tracks to incoming offer peer connection for:', sender_id, 'tracks:', localStream.getTracks().length);
-            localStream.getTracks().forEach(track => {
-              if (track.readyState === 'live') {
-                console.log('➕ Adding live track:', track.kind, 'enabled:', track.enabled, 'to peer connection for:', sender_id);
-                pc!.addTrack(track, localStream);
-              } else {
-                console.warn('⚠️ Skipping dead track:', track.kind, 'state:', track.readyState);
-              }
-            });
-          } else {
-            console.warn('⚠️ No local stream or tracks available when processing offer from:', sender_id);
-          }
-
-          // Handle ICE candidates
-          pc.onicecandidate = (event) => {
-            if (event.candidate) {
-              console.log('Sending ICE candidate to:', sender_id);
-              sendSignal(sender_id, 'ice', event.candidate);
-            } else {
-              console.log('ICE gathering complete for:', sender_id);
-            }
-          };
-
-          // Handle connection state changes
-          pc.onconnectionstatechange = () => {
-            console.log(`🔄 Connection state with ${sender_id}:`, pc!.connectionState);
-            if (pc!.connectionState === 'failed') {
-              console.error('Connection failed with:', sender_id);
-            }
-          };
-
-          // Handle ICE connection state changes
-          pc.oniceconnectionstatechange = () => {
-            console.log(`🧊 ICE connection state with ${sender_id}:`, pc!.iceConnectionState);
-          };
-
-          peerConnections.current.set(sender_id, pc);
-        }
-        
-        await pc.setRemoteDescription(new RTCSessionDescription(payload));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        console.log('Sending answer to:', sender_id);
-        await sendSignal(sender_id, 'answer', answer);
-      } else if (type === 'answer') {
-        console.log('Processing answer from:', sender_id);
-        const pc = peerConnections.current.get(sender_id);
-        if (pc && pc.signalingState === 'have-local-offer') {
-          await pc.setRemoteDescription(new RTCSessionDescription(payload));
-          console.log('Answer set successfully for:', sender_id);
-        }
-      } else if (type === 'ice') {
-        console.log('Processing ICE candidate from:', sender_id);
-        const pc = peerConnections.current.get(sender_id);
-        if (pc && pc.remoteDescription) {
-          await pc.addIceCandidate(new RTCIceCandidate(payload));
-          console.log('ICE candidate added for:', sender_id);
-        }
-      }
-    } catch (error) {
-      console.error(`Error handling ${type} signal from ${sender_id}:`, error);
-    }
-  }, [localStream]);
-
-  // Create peer connection
-  const createPeerConnection = useCallback((targetParticipantId: string, currentStream: MediaStream | null) => {
-    console.log('🔗 Creating peer connection for:', targetParticipantId);
-    const pc = new RTCPeerConnection(rtcConfig);
-    
-    // CRITICAL: Set up ontrack handler FIRST before adding any tracks
-    pc.ontrack = (event) => {
-      console.log('🎥 Received remote stream from:', targetParticipantId, 'streams:', event.streams.length);
-      if (event.streams && event.streams[0]) {
-        const [remoteStream] = event.streams;
-        console.log('🎯 Setting remote stream for participant:', targetParticipantId, 'tracks:', remoteStream.getTracks().length);
-        
-        // Force immediate update of participant stream
-        setParticipants(prev => {
-          const updated = prev.map(p => 
-            p.id === targetParticipantId 
-              ? { ...p, stream: remoteStream }
-              : p
-          );
-          console.log('✅ Updated participants with stream:', updated.find(p => p.id === targetParticipantId));
-          return updated;
-        });
-      } else {
-        console.warn('⚠️ No stream received in track event from:', targetParticipantId);
-      }
-    };
-    
-    // Add local stream to peer connection AFTER setting up handlers
-    if (currentStream && currentStream.getTracks().length > 0) {
-      console.log('📹 Adding local tracks to peer connection for:', targetParticipantId, 'tracks:', currentStream.getTracks().length);
-      currentStream.getTracks().forEach(track => {
-        if (track.readyState === 'live') {
-          console.log('➕ Adding live track:', track.kind, 'enabled:', track.enabled, 'to peer connection for:', targetParticipantId);
-          pc.addTrack(track, currentStream);
-        } else {
-          console.warn('⚠️ Skipping dead track:', track.kind, 'state:', track.readyState);
-        }
-      });
-    } else {
-      console.warn('⚠️ No local stream or tracks available when creating peer connection for:', targetParticipantId);
-    }
-
-    // Handle ICE candidates
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log('Sending ICE candidate to:', targetParticipantId);
-        sendSignal(targetParticipantId, 'ice', event.candidate);
-      } else {
-        console.log('ICE gathering complete for:', targetParticipantId);
-      }
-    };
-
-    // Handle connection state changes
-    pc.onconnectionstatechange = () => {
-      console.log(`🔄 Connection state with ${targetParticipantId}:`, pc.connectionState);
-      if (pc.connectionState === 'failed') {
-        console.error('Connection failed with:', targetParticipantId);
-      }
-    };
-
-    // Handle ICE connection state changes
-    pc.oniceconnectionstatechange = () => {
-      console.log(`🧊 ICE connection state with ${targetParticipantId}:`, pc.iceConnectionState);
-    };
-
-    peerConnections.current.set(targetParticipantId, pc);
-    return pc;
+  // ---- helpers ----
+  const ensureRemoteEntry = useCallback((id: string, name: string) => {
+    setParticipants(prev => (prev.some(p => p.id === id)
+      ? prev
+      : [...prev, { id, name, isMuted: false, isVideoOff: false }]));
   }, []);
 
-  // Supabase signaling hooks
+  const attachRemoteTrackHandler = useCallback((pc: RTCPeerConnection, targetId: string) => {
+    pc.ontrack = (event: RTCTrackEvent) => {
+      const [remoteStream] = event.streams;
+      if (!remoteStream) return;
+
+      // Log tracks for debugging
+      remoteStream.getTracks().forEach(t =>
+        console.log(`📡 Remote ${t.kind} track from ${targetId}:`, t.id, t.readyState)
+      );
+
+      // Set/merge the participant stream
+      setParticipants(prev =>
+        prev.map(p => (p.id === targetId ? { ...p, stream: remoteStream } : p))
+      );
+    };
+  }, []);
+
+  const addLocalToPCOrTransceive = useCallback((pc: RTCPeerConnection, stream: MediaStream | null) => {
+    const haveLocal = !!stream && stream.getTracks().length > 0;
+
+    // If we have local tracks, add sendrecv transceivers with those tracks
+    if (haveLocal) {
+      const addedKinds: Record<string, boolean> = {};
+      stream!.getTracks().forEach(track => {
+        pc.addTransceiver(track, { direction: 'sendrecv', streams: [stream!] });
+        addedKinds[track.kind] = true;
+      });
+
+      // If we don’t have one of the kinds locally (e.g., camera off → no video track yet),
+      // still add a recvonly transceiver so we can receive from remote.
+      if (!addedKinds['video']) pc.addTransceiver('video', { direction: 'recvonly' });
+      if (!addedKinds['audio']) pc.addTransceiver('audio', { direction: 'recvonly' });
+    } else {
+      // No local media yet → be explicit that we want to receive
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+    }
+  }, []);
+
+  const flushQueuedIce = useCallback(async (targetId: string) => {
+    const pc = peerConnections.current.get(targetId);
+    if (!pc || !pc.remoteDescription) return;
+    const q = iceQueue.current.get(targetId);
+    if (!q || q.length === 0) return;
+
+    for (const c of q) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(c));
+      } catch (e) {
+        console.warn('Failed to add queued ICE for', targetId, e);
+      }
+    }
+    iceQueue.current.set(targetId, []);
+  }, []);
+
+  // ---- signaling (Supabase) ----
   const { joinRoom, leaveRoom, sendSignal, getExistingParticipants } = useSupabaseSignaling({
     roomId,
     participantId,
     displayName: userName,
     onParticipantJoined: (participant) => {
-      console.log('🙋 New participant joined:', participant);
-      setParticipants(prev => {
-        if (prev.find(p => p.id === participant.participant_id)) return prev;
-        const newParticipants = [...prev, {
-          id: participant.participant_id,
-          name: participant.display_name,
-          isMuted: false,
-          isVideoOff: false
-        }];
-        
-        // Create peer connection for new participant if we have local stream
-        if (localStream && localStream.getTracks().length > 0) {
-          // Small delay to ensure stream is ready
-          setTimeout(async () => {
-            console.log('🤝 Creating peer connection for new participant:', participant.participant_id, 'local stream tracks:', localStream.getTracks().length);
-            const pc = createPeerConnection(participant.participant_id, localStream);
-            
-            // Create offer with explicit constraints
-            const offer = await pc.createOffer({
-              offerToReceiveAudio: true,
-              offerToReceiveVideo: true,
-              iceRestart: false
-            });
-            await pc.setLocalDescription(offer);
-            console.log('📤 Sending offer to new participant:', participant.participant_id, 'tracks in offer:', pc.getSenders().length);
-            await sendSignal(participant.participant_id, 'offer', offer);
-          }, 100);
-        } else {
-          console.warn('⚠️ No local stream or tracks available for new participant:', participant.participant_id);
+      const targetId = participant.participant_id;
+      const displayName = participant.display_name;
+      console.log('🙋 participant joined:', targetId, displayName);
+
+      ensureRemoteEntry(targetId, displayName);
+
+      // Create the PC immediately (we may still be acquiring local)
+      const pc = createPeerConnection(targetId, localStream);
+      // Proactively negotiate (offer) once PC is ready
+      (async () => {
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          await sendSignal(targetId, 'offer', offer);
+        } catch (e) {
+          console.error('❌ createOffer failed for new participant', targetId, e);
         }
-        
-        return newParticipants;
-      });
+      })();
     },
-    onParticipantLeft: (participantId) => {
-      console.log('Participant left:', participantId);
-      const pc = peerConnections.current.get(participantId);
+    onParticipantLeft: (id: string) => {
+      console.log('👋 participant left:', id);
+      const pc = peerConnections.current.get(id);
       if (pc) {
+        pc.ontrack = null;
+        pc.onicecandidate = null;
         pc.close();
-        peerConnections.current.delete(participantId);
+        peerConnections.current.delete(id);
       }
-      setParticipants(prev => prev.filter(p => p.id !== participantId));
+      setParticipants(prev => prev.filter(p => p.id !== id));
+      iceQueue.current.delete(id);
     },
-    onSignalReceived: handleSignalReceived
+    onSignalReceived: (signal) => handleSignalReceived(signal),
   });
 
-  // Initialize local media and join room
+  // ---- create peer connection ----
+  const createPeerConnection = useCallback((targetId: string, currentStream: MediaStream | null) => {
+    let pc = peerConnections.current.get(targetId);
+    if (pc) return pc;
+
+    console.log('🔗 creating RTCPeerConnection for', targetId);
+    pc = new RTCPeerConnection(rtcConfig);
+
+    attachRemoteTrackHandler(pc, targetId);
+    addLocalToPCOrTransceive(pc, currentStream);
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendSignal(targetId, 'ice', event.candidate);
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log(`🔄 ${targetId} connectionState:`, pc!.connectionState);
+      if (pc!.connectionState === 'failed') {
+        console.warn('connection failed; consider ICE restart');
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log(`🧊 ${targetId} iceConnectionState:`, pc!.iceConnectionState);
+    };
+
+    peerConnections.current.set(targetId, pc);
+    // Ensure we have a queue for early ICE
+    if (!iceQueue.current.has(targetId)) iceQueue.current.set(targetId, []);
+    return pc;
+  }, [addLocalToPCOrTransceive, attachRemoteTrackHandler, rtcConfig, sendSignal]);
+
+  // ---- incoming signals ----
+  const handleSignalReceived = useCallback(async (signal: any) => {
+    const { sender_id, type, payload } = signal;
+    try {
+      let pc = peerConnections.current.get(sender_id);
+      if (!pc) {
+        pc = createPeerConnection(sender_id, localStream);
+      }
+
+      if (type === 'offer') {
+        console.log('📥 offer from', sender_id);
+        await pc.setRemoteDescription(payload);
+        await flushQueuedIce(sender_id);
+
+        // If local media is available and not yet attached as senders, upgrade directions to sendrecv
+        if (localStream) {
+          const haveVideoSender = pc.getSenders().some(s => s.track?.kind === 'video');
+          const haveAudioSender = pc.getSenders().some(s => s.track?.kind === 'audio');
+
+          // If we had only recvonly transceivers earlier, attach tracks now
+          localStream.getTracks().forEach(track => {
+            const sameKindSender = pc!.getSenders().find(s => s.track?.kind === track.kind);
+            if (!sameKindSender) {
+              pc!.addTrack(track, localStream);
+            }
+          });
+
+          // (Optional) you could also iterate transceivers and set direction = 'sendrecv'
+          pc.getTransceivers().forEach(t => {
+            if (t.sender && t.sender.track) t.direction = 'sendrecv';
+          });
+
+          console.log('senders after attaching:', pc.getSenders().map(s => s.track?.kind));
+        }
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await sendSignal(sender_id, 'answer', answer);
+      }
+
+      else if (type === 'answer') {
+        console.log('📥 answer from', sender_id);
+        if (pc.signalingState === 'have-local-offer') {
+          await pc.setRemoteDescription(payload);
+          await flushQueuedIce(sender_id);
+        }
+      }
+
+      else if (type === 'ice') {
+        const candidate: RTCIceCandidateInit = payload;
+        if (pc.remoteDescription) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (e) {
+            console.warn('addIceCandidate failed (live)', e);
+          }
+        } else {
+          // queue until remoteDescription is set
+          const q = iceQueue.current.get(sender_id) ?? [];
+          q.push(candidate);
+          iceQueue.current.set(sender_id, q);
+        }
+      }
+    } catch (err) {
+      console.error(`Error handling ${type} from ${sender_id}`, err);
+    }
+  }, [createPeerConnection, localStream, flushQueuedIce, sendSignal]);
+
+  // ---- init local media & join room ----
   useEffect(() => {
-    const initializeMedia = async () => {
+    let cancelled = false;
+
+    const init = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            frameRate: { ideal: 30 }
-          },
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
             sampleRate: 48000,
-            channelCount: 1
+            channelCount: 1,
           },
         });
+        if (cancelled) return;
+
         setLocalStream(stream);
-        
-        // Join room via Supabase
         await joinRoom();
-        
-        // Get existing participants and create peer connections
-        const existingParticipants = await getExistingParticipants();
-        console.log('👥 Existing participants:', existingParticipants);
-        
-        if (existingParticipants.length > 0) {
-          setParticipants(existingParticipants.map(p => ({
-            id: p.participant_id,
-            name: p.display_name,
-            isMuted: false,
-            isVideoOff: false
-          })));
-          
-          // Create offers for existing participants - ensure stream is ready
-          console.log('🎯 Creating peer connections for existing participants with stream tracks:', stream.getTracks().length);
-          // Add delay to ensure stream tracks are fully ready
-          setTimeout(async () => {
-            for (const participant of existingParticipants) {
-              try {
-                console.log('🚀 Creating offer for existing participant:', participant.participant_id);
-                const pc = createPeerConnection(participant.participant_id, stream);
-                
-                const offer = await pc.createOffer({
-                  offerToReceiveAudio: true,
-                  offerToReceiveVideo: true,
-                  iceRestart: false
-                });
-                await pc.setLocalDescription(offer);
-                console.log('📤 Sending offer to existing participant:', participant.participant_id, 'tracks in offer:', pc.getSenders().length);
-                await sendSignal(participant.participant_id, 'offer', offer);
-              } catch (error) {
-                console.error('❌ Failed to create offer for existing participant:', participant.participant_id, error);
-              }
-            }
-          }, 300);
+
+        const existing = await getExistingParticipants();
+        console.log('👥 existing participants:', existing);
+
+        // Ensure roster straight away
+        existing.forEach(p => ensureRemoteEntry(p.participant_id, p.display_name));
+
+        // Create/offer to each existing participant
+        for (const p of existing) {
+          const pc = createPeerConnection(p.participant_id, stream);
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            await sendSignal(p.participant_id, 'offer', offer);
+          } catch (e) {
+            console.error('❌ createOffer failed for existing participant', p.participant_id, e);
+          }
         }
-        
+
+        toast({ title: 'Connected to meeting', description: `Welcome to room ${roomId}!` });
+      } catch (e) {
+        console.error('getUserMedia error:', e);
         toast({
-          title: "Connected to meeting",
-          description: `Welcome to room ${roomId}!`,
-        });
-      } catch (error) {
-        console.error('Error accessing media devices:', error);
-        toast({
-          title: "Camera/microphone access denied",
-          description: "Please allow access to join the video call.",
-          variant: "destructive",
+          title: 'Camera/microphone access denied',
+          description: 'Please allow access to join the video call.',
+          variant: 'destructive',
         });
       }
     };
 
-    initializeMedia();
+    init();
 
     return () => {
-      // Cleanup
+      cancelled = true;
       leaveRoom();
-      
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-      }
       peerConnections.current.forEach(pc => pc.close());
       peerConnections.current.clear();
+      iceQueue.current.clear();
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+      }
     };
-  }, [roomId, toast, userName, createPeerConnection, joinRoom, leaveRoom, getExistingParticipants, sendSignal]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]); // keep deps minimal; helpers are stable via useCallback
 
-  // Update all peer connections with new stream
+  // ---- replace media across PCs ----
   const updatePeerConnectionStreams = useCallback(async (newStream: MediaStream) => {
-    console.log('🔄 Updating peer connections with new stream, tracks:', newStream.getTracks().length);
-    
-    const updatePromises = Array.from(peerConnections.current.entries()).map(async ([participantId, pc]) => {
-      try {
-        // Remove old tracks using replaceTrack when possible, otherwise remove and add
-        const senders = pc.getSenders();
-        const newTracks = newStream.getTracks();
-        
-        // Replace existing tracks with new ones
-        for (const sender of senders) {
-          if (sender.track) {
-            const newTrack = newTracks.find(track => track.kind === sender.track!.kind);
-            if (newTrack) {
-              console.log('🔄 Replacing track:', sender.track.kind, 'for participant:', participantId);
-              await sender.replaceTrack(newTrack);
-            } else {
-              console.log('🗑️ Removing track:', sender.track.kind, 'for participant:', participantId);
-              pc.removeTrack(sender);
-            }
-          }
-        }
-        
-        // Add any new tracks that don't have senders
-        for (const track of newTracks) {
-          const existingSender = senders.find(sender => sender.track?.kind === track.kind);
-          if (!existingSender) {
-            console.log('➕ Adding new track:', track.kind, 'enabled:', track.enabled, 'to participant:', participantId);
-            pc.addTrack(track, newStream);
-          }
-        }
+    console.log('🔄 updating all PCs with new stream');
+    const entries = Array.from(peerConnections.current.entries());
+    await Promise.all(entries.map(async ([id, pc]) => {
+      const newTracks = newStream.getTracks();
 
-        // Always renegotiate to ensure changes are communicated
-        console.log('🤝 Renegotiating with participant:', participantId);
+      // replace existing sender tracks by kind
+      for (const kind of ['audio', 'video'] as const) {
+        const newTrack = newTracks.find(t => t.kind === kind);
+        const sender = pc.getSenders().find(s => s.track?.kind === kind);
+
+        if (sender && newTrack) {
+          await sender.replaceTrack(newTrack);
+        } else if (!sender && newTrack) {
+          pc.addTrack(newTrack, newStream);
+        } else if (sender && !newTrack) {
+          pc.removeTrack(sender);
+        }
+      }
+
+      // Negotiate after changes
+      try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await sendSignal(participantId, 'offer', offer);
-        
-      } catch (error) {
-        console.error('Error updating peer connection for participant:', participantId, error);
+        await sendSignal(id, 'offer', offer);
+      } catch (e) {
+        console.error('Renegotiation failed for', id, e);
       }
-    });
-    
-    await Promise.all(updatePromises);
+    }));
   }, [sendSignal]);
 
-  // Toggle mute
+  // ---- controls ----
   const handleToggleMute = useCallback(async () => {
-    if (localStream) {
-      const audioTrack = localStream.getAudioTracks()[0];
-      if (audioTrack) {
-        // Check if track is stopped
-        if (audioTrack.readyState === 'ended') {
-          console.log('Audio track was stopped, recreating stream...');
-          try {
-            // Create new stream
-            const newStream = await navigator.mediaDevices.getUserMedia({
-              video: !isVideoOff ? {
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-                frameRate: { ideal: 30 }
-              } : false,
-              audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                sampleRate: 48000,
-                channelCount: 1
-              },
-            });
-            
-            setLocalStream(newStream);
-            setIsMuted(false);
-            
-            // Update all peer connections
-            await updatePeerConnectionStreams(newStream);
-          } catch (error) {
-            console.error('Error recreating audio stream:', error);
-            toast({
-              title: "Microphone error",
-              description: "Unable to restart microphone. Please check permissions.",
-              variant: "destructive",
-            });
-          }
-        } else {
-          // Simply toggle the track enabled state
-          audioTrack.enabled = !audioTrack.enabled;
-          setIsMuted(!audioTrack.enabled);
-          console.log('🎤 Audio track toggled:', audioTrack.enabled ? 'enabled' : 'disabled');
-        }
+    if (!localStream) return;
+    const audioTrack = localStream.getAudioTracks()[0];
+    if (!audioTrack) return;
+
+    if (audioTrack.readyState === 'ended') {
+      try {
+        const fresh = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideoOff ? false : true });
+        setLocalStream(fresh);
+        setIsMuted(false);
+        await updatePeerConnectionStreams(fresh);
+      } catch (e) {
+        console.error('Failed to recreate audio', e);
+        toast({ title: 'Microphone error', description: 'Unable to restart microphone.', variant: 'destructive' });
       }
+      return;
     }
+
+    audioTrack.enabled = !audioTrack.enabled;
+    setIsMuted(!audioTrack.enabled);
   }, [localStream, isVideoOff, updatePeerConnectionStreams, toast]);
 
-  // Toggle video
   const handleToggleVideo = useCallback(async () => {
-    if (localStream) {
-      const videoTrack = localStream.getVideoTracks()[0];
-      
-      if (videoTrack && videoTrack.readyState === 'ended') {
-        // Track is stopped, need to recreate stream
-        console.log('Video track was stopped, recreating stream...');
-        try {
-          const newStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-              frameRate: { ideal: 30 }
-            },
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-              sampleRate: 48000,
-              channelCount: 1
-            },
-          });
-          
-          setLocalStream(newStream);
-          setIsVideoOff(false);
-          
-          // Update all peer connections with new stream
-          await updatePeerConnectionStreams(newStream);
-          
-          toast({
-            title: "Camera reactivated",
-            description: "Your camera is now working again",
-          });
-        } catch (error) {
-          console.error('Error recreating video stream:', error);
-          toast({
-            title: "Camera error",
-            description: "Unable to restart camera. Please check permissions.",
-            variant: "destructive",
-          });
-        }
-      } else if (videoTrack) {
-        // Track exists and is active, just toggle enabled state
-        const newVideoState = !videoTrack.enabled;
-        videoTrack.enabled = newVideoState;
-        setIsVideoOff(!newVideoState);
-        
-        console.log('📹 Video track toggled:', newVideoState ? 'enabled' : 'disabled');
-        
-        // Force renegotiation to ensure remote participants see the change
-        await updatePeerConnectionStreams(localStream);
-      } else {
-        // No video track exists, create one
-        console.log('No video track found, creating new stream...');
-        try {
-          const newStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-              frameRate: { ideal: 30 }
-            },
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-              sampleRate: 48000,
-              channelCount: 1
-            },
-          });
-          
-          setLocalStream(newStream);
-          setIsVideoOff(false);
-          
-          await updatePeerConnectionStreams(newStream);
-        } catch (error) {
-          console.error('Error creating video stream:', error);
-          toast({
-            title: "Camera error", 
-            description: "Unable to access camera. Please check permissions.",
-            variant: "destructive",
-          });
-        }
-      }
-    }
-  }, [localStream, isMuted, updatePeerConnectionStreams, toast]);
+    if (!localStream) return;
+    const videoTrack = localStream.getVideoTracks()[0];
 
-  // Screen sharing
+    if (videoTrack && videoTrack.readyState !== 'ended') {
+      const next = !videoTrack.enabled;
+      videoTrack.enabled = next;
+      setIsVideoOff(!next);
+      // Not strictly required to renegotiate when just toggling enabled
+      return;
+    }
+
+    // Need to add/create a new video track
+    try {
+      const cam = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+        audio: false,
+      });
+      const newVideo = cam.getVideoTracks()[0];
+      const newStream = new MediaStream([...(localStream.getAudioTracks()), newVideo].filter(Boolean) as MediaStreamTrack[]);
+      setLocalStream(newStream);
+      setIsVideoOff(false);
+      await updatePeerConnectionStreams(newStream);
+    } catch (e) {
+      console.error('Failed to (re)enable video', e);
+      toast({ title: 'Camera error', description: 'Unable to access camera.', variant: 'destructive' });
+    }
+  }, [localStream, updatePeerConnectionStreams, toast]);
+
   const handleToggleScreenShare = useCallback(async () => {
     try {
       if (isScreenSharing) {
-        // Stop screen sharing, return to camera
-        if (localStream) {
-          localStream.getTracks().forEach(track => track.stop());
-        }
-        
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            frameRate: { ideal: 30 }
-          },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            sampleRate: 48000,
-            channelCount: 1
-          },
+        // back to camera
+        const cam = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
-        setLocalStream(stream);
+        setLocalStream(cam);
         setIsScreenSharing(false);
         setIsMuted(false);
         setIsVideoOff(false);
-        
-        // Update all peer connections with camera stream
-        updatePeerConnectionStreams(stream);
-        
-        toast({
-          title: "Screen sharing stopped",
-          description: "Switched back to camera",
-        });
+        await updatePeerConnectionStreams(cam);
+        toast({ title: 'Screen sharing stopped', description: 'Switched back to camera' });
       } else {
-        // Start screen sharing - KEEP MICROPHONE AUDIO
-        const currentAudioTrack = localStream ? localStream.getAudioTracks()[0] : null;
-        
-        if (localStream) {
-          // Only stop video tracks, keep audio
-          localStream.getVideoTracks().forEach(track => track.stop());
-        }
-        
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: false, // We'll keep the existing microphone audio
-        });
-        
-        // Create combined stream with screen video + microphone audio
-        const combinedStream = new MediaStream();
-        
-        // Add screen video track
-        screenStream.getVideoTracks().forEach(track => {
-          combinedStream.addTrack(track);
-        });
-        
-        // Add existing microphone audio track or create new one
-        if (currentAudioTrack && currentAudioTrack.readyState === 'live') {
-          console.log('🎤 Keeping existing microphone audio during screen share');
-          combinedStream.addTrack(currentAudioTrack);
+        const currentAudio = localStream?.getAudioTracks().find(t => t.readyState === 'live') ?? null;
+        const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+
+        const combined = new MediaStream();
+        display.getVideoTracks().forEach(t => combined.addTrack(t));
+        if (currentAudio) {
+          combined.addTrack(currentAudio);
         } else {
-          console.log('🎤 Creating new microphone audio for screen share');
           try {
-            const micStream = await navigator.mediaDevices.getUserMedia({
-              audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                sampleRate: 48000,
-                channelCount: 1
-              }
-            });
-            micStream.getAudioTracks().forEach(track => {
-              combinedStream.addTrack(track);
-            });
-          } catch (audioError) {
-            console.warn('⚠️ Could not get microphone for screen share:', audioError);
+            const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+            mic.getAudioTracks().forEach(t => combined.addTrack(t));
+          } catch (e) {
+            console.warn('No mic available for screenshare', e);
           }
         }
-        
-        setLocalStream(combinedStream);
-        setIsScreenSharing(true);
-        
-        // Update all peer connections with combined stream
-        updatePeerConnectionStreams(combinedStream);
-        
-        toast({
-          title: "Screen sharing started",
-          description: "Your screen is now being shared",
-        });
 
-        // Handle screen share ending (when user clicks "Stop sharing" in browser)
-        screenStream.getVideoTracks()[0].addEventListener('ended', async () => {
-          console.log('Screen sharing ended by user');
+        setLocalStream(combined);
+        setIsScreenSharing(true);
+        await updatePeerConnectionStreams(combined);
+        toast({ title: 'Screen sharing started', description: 'Your screen is now being shared' });
+
+        display.getVideoTracks()[0].addEventListener('ended', async () => {
           try {
-            const cameraStream = await navigator.mediaDevices.getUserMedia({
-              video: {
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-                frameRate: { ideal: 30 }
-              },
-              audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                sampleRate: 48000,
-                channelCount: 1
-              },
+            const cam = await navigator.mediaDevices.getUserMedia({
+              video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+              audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
             });
-            setLocalStream(cameraStream);
+            setLocalStream(cam);
             setIsScreenSharing(false);
             setIsMuted(false);
             setIsVideoOff(false);
-            
-            // Update all peer connections with camera stream
-            updatePeerConnectionStreams(cameraStream);
-            
-            toast({
-              title: "Screen sharing ended",
-              description: "Switched back to camera",
-            });
-          } catch (error) {
-            console.error('Error returning to camera after screen share ended:', error);
+            await updatePeerConnectionStreams(cam);
+            toast({ title: 'Screen sharing ended', description: 'Switched back to camera' });
+          } catch (err) {
+            console.error('Error returning to camera after screenshare', err);
           }
         });
       }
-    } catch (error) {
-      console.error('Error toggling screen share:', error);
-      toast({
-        title: "Screen sharing failed",
-        description: "Unable to share your screen. Please try again.",
-        variant: "destructive",
-      });
+    } catch (e) {
+      console.error('Screen share error', e);
+      toast({ title: 'Screen sharing failed', description: 'Unable to share your screen.', variant: 'destructive' });
     }
   }, [isScreenSharing, localStream, updatePeerConnectionStreams, toast]);
 
-  // Leave call
   const handleLeaveCall = useCallback(async () => {
-    if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
-    }
+    localStream?.getTracks().forEach(t => t.stop());
     peerConnections.current.forEach(pc => pc.close());
+    peerConnections.current.clear();
+    iceQueue.current.clear();
     await leaveRoom();
     onLeaveRoom();
   }, [localStream, onLeaveRoom, leaveRoom]);
 
-  // Calculate grid layout class
+  // ---- layout helpers ----
   const getGridClass = () => {
     if (pinnedParticipant) return 'video-grid-pinned';
-    const totalParticipants = participants.length + 1; // +1 for local user
-    if (totalParticipants === 1) return 'video-grid-single';
-    if (totalParticipants === 2) return 'video-grid-dual';
+    const total = participants.length + 1;
+    if (total === 1) return 'video-grid-single';
+    if (total === 2) return 'video-grid-dual';
     return 'video-grid';
   };
 
-  // Handle pin/unpin participant
-  const handlePinParticipant = (participantId: string) => {
-    setPinnedParticipant(pinnedParticipant === participantId ? null : participantId);
+  const handlePinParticipant = (id: string) => {
+    setPinnedParticipant(pinnedParticipant === id ? null : id);
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-video-surface relative">
-      {/* Meeting Header */}
+      {/* Header */}
       <div className="absolute top-6 left-6 z-40">
         <div className="bg-video-surface/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-border">
-          <h2 className="text-sm font-medium text-foreground">
-            Meeting: {roomId}
-          </h2>
+          <h2 className="text-sm font-medium text-foreground">Meeting: {roomId}</h2>
           <p className="text-xs text-muted-foreground">
             {participants.length + 1} participant{participants.length !== 0 ? 's' : ''}
           </p>
         </div>
       </div>
 
-      {/* Video Grid */}
+      {/* Grid */}
       <div className="p-6 pt-20">
         <div className={`${getGridClass()} max-w-7xl mx-auto`}>
           {pinnedParticipant ? (
             <>
-              {/* Pinned participant (full screen) */}
               {pinnedParticipant === 'local' ? (
                 <VideoParticipant
                   stream={localStream || undefined}
                   name={userName}
                   isMuted={isMuted}
                   isVideoOff={isVideoOff}
-                  isLocal={true}
-                  isPinned={true}
+                  isLocal
+                  isPinned
                   onPin={() => handlePinParticipant('local')}
                 />
               ) : (
                 participants
                   .filter(p => p.id === pinnedParticipant)
-                  .map((participant) => (
+                  .map(p => (
                     <VideoParticipant
-                      key={participant.id}
-                      stream={participant.stream}
-                      name={participant.name}
-                      isMuted={participant.isMuted}
-                      isVideoOff={participant.isVideoOff}
-                      isPinned={true}
-                      onPin={() => handlePinParticipant(participant.id)}
+                      key={p.id}
+                      stream={p.stream}
+                      name={p.name}
+                      isMuted={p.isMuted}
+                      isVideoOff={p.isVideoOff}
+                      isPinned
+                      onPin={() => handlePinParticipant(p.id)}
                     />
                   ))
               )}
-              
-              {/* Thumbnail grid for other participants */}
+
               <div className="video-thumbnails">
                 {pinnedParticipant !== 'local' && (
                   <VideoParticipant
@@ -748,47 +524,44 @@ export const VideoRoom = ({ roomId, userName, onLeaveRoom }: VideoRoomProps) => 
                     name={userName}
                     isMuted={isMuted}
                     isVideoOff={isVideoOff}
-                    isLocal={true}
-                    isThumbnail={true}
+                    isLocal
+                    isThumbnail
                     onPin={() => handlePinParticipant('local')}
                   />
                 )}
                 {participants
                   .filter(p => p.id !== pinnedParticipant)
-                  .map((participant) => (
+                  .map(p => (
                     <VideoParticipant
-                      key={participant.id}
-                      stream={participant.stream}
-                      name={participant.name}
-                      isMuted={participant.isMuted}
-                      isVideoOff={participant.isVideoOff}
-                      isThumbnail={true}
-                      onPin={() => handlePinParticipant(participant.id)}
+                      key={p.id}
+                      stream={p.stream}
+                      name={p.name}
+                      isMuted={p.isMuted}
+                      isVideoOff={p.isVideoOff}
+                      isThumbnail
+                      onPin={() => handlePinParticipant(p.id)}
                     />
                   ))}
               </div>
             </>
           ) : (
             <>
-              {/* Local video */}
               <VideoParticipant
                 stream={localStream || undefined}
                 name={userName}
                 isMuted={isMuted}
                 isVideoOff={isVideoOff}
-                isLocal={true}
+                isLocal
                 onPin={() => handlePinParticipant('local')}
               />
-              
-              {/* Remote participants */}
-              {participants.map((participant) => (
+              {participants.map(p => (
                 <VideoParticipant
-                  key={participant.id}
-                  stream={participant.stream}
-                  name={participant.name}
-                  isMuted={participant.isMuted}
-                  isVideoOff={participant.isVideoOff}
-                  onPin={() => handlePinParticipant(participant.id)}
+                  key={p.id}
+                  stream={p.stream}
+                  name={p.name}
+                  isMuted={p.isMuted}
+                  isVideoOff={p.isVideoOff}
+                  onPin={() => handlePinParticipant(p.id)}
                 />
               ))}
             </>
